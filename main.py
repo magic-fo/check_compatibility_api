@@ -1,90 +1,77 @@
 import os
 import json
-from typing import List, Dict, Any, Optional, Tuple, Set
-from datetime import datetime
-
-from dotenv import load_dotenv
+import traceback
+from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from supabase import create_client, Client
 import google.generativeai as genai
-
-# Load environment variables
-load_dotenv()
-
-# Initialize FastAPI app
-app = FastAPI(title="Part Compatibility API")
+from fastapi.middleware.cors import CORSMiddleware
 
 # Initialize Supabase client
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
+supabase_url = os.environ.get("SUPABASE_URL")
+supabase_key = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
 
-# Initialize Google Gemini client
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-model_name = os.getenv("GOOGLE_MODEL_NAME", "gemini-2.0-flash-thinking-exp")
+# Initialize Gemini
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+genai.configure(api_key=GOOGLE_API_KEY)
+model = genai.GenerativeModel('gemini-pro')
 
-# --- Data Models ---
-class CompatibilityCheckRequest(BaseModel):
-    """Request model for compatibility check endpoint"""
-    part_ids: List[str] = Field(..., description="List of part IDs to check compatibility between")
+app = FastAPI()
 
-class CompatibilityCheckResponse(BaseModel):
-    """Response model for a single part compatibility result"""
-    part_id: str = Field(..., description="Part ID")
-    product_name: str = Field(..., description="Product name")
-    available: bool = Field(..., description="Whether the part is compatible with other parts")
-    incompatibility: Optional[Dict[str, str]] = Field(None, description="Incompatibility details if available is false")
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# --- Data Collection Functions ---
+class CompatibilityRequest(BaseModel):
+    part_ids: List[str]
+
 def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
-    Get information about specified parts
+    Get part information from Supabase
     
     Args:
-        part_ids: List of part IDs to retrieve
+        part_ids: List of part IDs to get information for
         
     Returns:
         List of part information dictionaries
-        
-    Raises:
-        HTTPException: If parts cannot be found
     """
-    if not part_ids:
-        return []
-        
-    response = supabase.table("parts").select("*").in_("id", part_ids).execute()
-    
-    if not response.data:
-        raise HTTPException(status_code=404, detail=f"No parts found with IDs: {part_ids}")
-    
-    return response.data
+    parts = []
+    for part_id in part_ids:
+        # part_id를 문자열로 처리
+        response = supabase.table("parts").select("*").eq("id", part_id).execute()
+        if response.data:
+            parts.append(response.data[0])
+    return parts
 
 def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get subsystems that contain the specified parts
     
     Args:
-        part_ids: List of part IDs
+        part_ids: List of part IDs to get subsystems for
         
     Returns:
-        List of subsystem information dictionaries
+        List of subsystem dictionaries
     """
-    if not part_ids:
-        return []
-    
-    # This query finds subsystems where part_ids array contains any of the specified part_ids
     subsystems = []
+    seen_subsystem_ids = set()
     
     for part_id in part_ids:
-        # Direct query with string part_id
+        # part_id를 문자열로 사용
         response = supabase.table("subsystems").select("*").contains("part_ids", [part_id]).execute()
-        if response.data:
-            for subsystem in response.data:
-                # Avoid duplicate subsystems
-                if not any(s["id"] == subsystem["id"] for s in subsystems):
-                    subsystems.append(subsystem)
-    
+        
+        for subsystem in response.data:
+            if subsystem["id"] not in seen_subsystem_ids:
+                subsystems.append(subsystem)
+                seen_subsystem_ids.add(subsystem["id"])
+                
     return subsystems
 
 def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]:
@@ -92,211 +79,173 @@ def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]
     Get systems that contain the specified subsystems
     
     Args:
-        subsystem_ids: List of subsystem IDs
+        subsystem_ids: List of subsystem IDs to get systems for
         
     Returns:
-        List of system information dictionaries
+        List of system dictionaries
     """
-    if not subsystem_ids:
-        return []
-    
-    # This query finds systems where subsystem_ids array contains any of the specified subsystem_ids
     systems = []
+    seen_system_ids = set()
     
     for subsystem_id in subsystem_ids:
+        # subsystem_id를 문자열로 사용
         response = supabase.table("systems").select("*").contains("subsystem_ids", [subsystem_id]).execute()
-        if response.data:
-            for system in response.data:
-                # Avoid duplicate systems
-                if not any(s["id"] == system["id"] for s in systems):
-                    systems.append(system)
-    
+        
+        for system in response.data:
+            if system["id"] not in seen_system_ids:
+                systems.append(system)
+                seen_system_ids.add(system["id"])
+                
     return systems
 
-def get_subsystems_and_systems_for_parts(part_ids: List[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> str:
     """
-    Get both subsystems and systems related to the specified parts
+    Format input for LLM compatibility check
     
     Args:
-        part_ids: List of part IDs
+        parts: List of part information
+        subsystems: List of subsystems containing the parts
+        systems: List of systems containing the subsystems
         
     Returns:
-        Tuple of (subsystems, systems)
+        Formatted input string for LLM
     """
-    subsystems = get_subsystems_for_parts(part_ids)
-    subsystem_ids = [s["id"] for s in subsystems]
-    systems = get_systems_for_subsystems(subsystem_ids)
-    
-    return subsystems, systems
-
-# --- LLM Integration Functions ---
-def format_llm_input(
-    parts: List[Dict[str, Any]], 
-    subsystems: List[Dict[str, Any]], 
-    systems: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
-    """
-    Format part information for LLM in the specified field order
-    
-    Args:
-        parts: List of part information dictionaries
-        subsystems: List of subsystem information dictionaries
-        systems: List of system information dictionaries
-        
-    Returns:
-        List of formatted part information dictionaries with fields in the specified order
-    """
-    formatted_parts = []
-    
-    # Create mapping from part ID to subsystem
-    part_to_subsystem = {}
-    for subsystem in subsystems:
-        subsystem_id = subsystem["id"]
-        part_ids = subsystem.get("part_ids", [])
-        for part_id in part_ids:
-            # 데이터베이스에서 반환된 정수 ID를 문자열로 변환
-            part_to_subsystem[str(part_id)] = subsystem
-    
-    # Create mapping from subsystem ID to system
-    subsystem_to_system = {}
-    for system in systems:
-        system_id = system["id"]
-        subsystem_ids = system.get("subsystem_ids", [])
-        for subsystem_id in subsystem_ids:
-            # subsystem_ids are already strings in the system table
-            subsystem_to_system[str(subsystem_id)] = system
-    
+    # Format parts information
+    parts_info = []
     for part in parts:
-        part_id = part["id"]
-        # 데이터베이스에서 반환된 정수 ID를 문자열로 변환
-        part_id_str = str(part_id)
-        # Use string part_id for lookup since we standardized the mapping keys to strings
-        subsystem = part_to_subsystem.get(part_id_str)
-        
-        subsystem_id = subsystem["id"] if subsystem else None
-        subsystem_id_str = str(subsystem_id) if subsystem_id else None
-        system = subsystem_to_system.get(subsystem_id_str) if subsystem_id_str else None
-        
-        # Format part info in the specified field order
-        formatted_part = {
-            "system_description": system.get("system_description", "") if system else "",
-            "subsystem_name": subsystem.get("subsystem_name", "") if subsystem else "",
-            "subsystem_description": subsystem.get("subsystem_description", "") if subsystem else "",
-            "part_name": part.get("part_name", ""),
-            "product_name": part.get("product_name", ""),
-            "part_id": part_id_str,  # 문자열로 변환된 ID 사용
-            "part_description": part.get("part_description", ""),
-            "specifications": part.get("specifications", {}),
-            "dimensions": part.get("dimensions", {}),
-            "weight": part.get("weight", {})
+        part_info = {
+            "id": str(part["id"]),  # ID를 문자열로 변환
+            "name": part["name"],
+            "category": part["category"],
+            "specifications": part["specifications"],
+            "description": part["description"]
         }
+        parts_info.append(part_info)
         
-        formatted_parts.append(formatted_part)
+    # Format subsystems information
+    subsystems_info = []
+    for subsystem in subsystems:
+        subsystem_info = {
+            "id": str(subsystem["id"]),  # ID를 문자열로 변환
+            "name": subsystem["name"],
+            "description": subsystem["description"],
+            "requirements": subsystem["requirements"]
+        }
+        subsystems_info.append(subsystem_info)
+        
+    # Format systems information
+    systems_info = []
+    for system in systems:
+        system_info = {
+            "id": str(system["id"]),  # ID를 문자열로 변환
+            "name": system["name"],
+            "description": system["description"],
+            "requirements": system["requirements"]
+        }
+        systems_info.append(system_info)
+        
+    # Combine all information
+    input_data = {
+        "parts": parts_info,
+        "subsystems": subsystems_info,
+        "systems": systems_info
+    }
     
-    return formatted_parts
+    return json.dumps(input_data, indent=2)
 
-def check_compatibility_with_llm(formatted_parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+async def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Use Gemini LLM to evaluate compatibility between parts
+    Check compatibility between parts using LLM
     
     Args:
-        formatted_parts: List of formatted part information dictionaries
+        parts_info: List of part information
+        subsystems: List of subsystems containing the parts
+        systems: List of systems containing the subsystems
         
     Returns:
-        List of compatibility check results
+        List of compatibility results
     """
-    if not formatted_parts:
-        return []
+    # Format input data
+    input_data = format_llm_input(parts_info, subsystems, systems)
     
-    if len(formatted_parts) == 1:
-        # Single part is always compatible with itself
-        part = formatted_parts[0]
-        return [{
-            "part_id": part["part_id"],
-            "product_name": part["product_name"],
-            "available": True,
-            "incompatibility": {}
-        }]
-    
-    # Format parts as JSON for LLM
-    parts_json = json.dumps(formatted_parts, indent=2)
-    
-    # Create prompt for Gemini
-    prompt = f"""
-You are a domain expert in part compatibility analysis.
+    # Create prompt
+    prompt = f"""You are a drone engineering expert. Please analyze the compatibility between the provided drone parts.
+The input data includes parts information, subsystems they belong to, and systems those subsystems are part of.
 
-# PARTS INFORMATION
-I'm providing you with a list of parts in JSON format:
-{parts_json}
+Input data:
+{input_data}
 
-# TASK
-Please analyze whether these parts are compatible with each other. For each part, provide:
+Please check if there are any compatibility issues between the parts, considering:
+1. Physical compatibility (size, mounting, etc.)
+2. Electrical compatibility (voltage, current, etc.)
+3. Performance compatibility (power requirements, etc.)
+4. Protocol compatibility (communication standards, etc.)
 
-1. part_id (as a string, NOT converted to a number)
-2. product_name
-3. available (boolean: true if compatible with all other parts, false if not)
-4. incompatibility (if available is false, list incompatible part_ids as keys with reasons as values)
+Return a JSON array where each object represents a part and its compatibility status. Each object should have:
+- part_id (string): The ID of the part being analyzed
+- available (boolean): Whether the part is available and valid
+- incompatibility (object): A dictionary mapping incompatible part IDs (as strings) to reasons for incompatibility
+- notes (string): Any additional notes about the part's compatibility
 
-# OUTPUT FORMAT
-Respond with a JSON array containing one object per part, like this example:
-```json
+Example response format:
 [
   {{
-    "part_id": "1234", // Must be a string exactly as provided, do not convert to number
-    "product_name": "Product A",
+    "part_id": "123",
     "available": true,
-    "incompatibility": {{}}
+    "incompatibility": {{}},
+    "notes": "Compatible with all other parts"
   }},
   {{
-    "part_id": "5678", // Must be a string exactly as provided, do not convert to number
-    "product_name": "Product B",
-    "available": false,
+    "part_id": "456",
+    "available": true,
     "incompatibility": {{
-      "1234": "Reason for incompatibility with part 1234"
-    }}
+      "789": "Voltage mismatch - requires 12V but only supports 5V"
+    }},
+    "notes": "Partially compatible"
   }}
 ]
-```
 
-# COMPATIBILITY ANALYSIS
-Analyze compatibility based on:
-1. System/subsystem compatibility
-2. Physical dimensions
-3. Specifications
-4. Functional requirements
+Important: 
+- Keep part_id as a string, do not convert to number
+- Only include incompatibility entries for actual incompatibilities
+- Provide specific technical reasons for any incompatibilities
+- Consider both direct and indirect compatibility requirements
+"""
 
-Important:
-- ONLY return the JSON array
-- DO NOT include explanations
-- Carefully examine each part's specifications
-- Return ALL part_ids as STRINGS exactly as provided, not as numbers or in a different format
-    """
-    
     try:
-        # Generate content using Gemini
-        model = genai.GenerativeModel(model_name)
+        # Get response from LLM
         response = model.generate_content(prompt)
+        print(f"Raw LLM response: {response.text}")
         
-        # Parse the response
-        result_text = response.text
-        
-        # Extract JSON if enclosed in code blocks
-        if "```json" in result_text and "```" in result_text:
-            # Extract content between ```json and ```
-            result_text = result_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in result_text:
-            # Extract content between ``` and ```
-            result_text = result_text.split("```")[1].split("```")[0].strip()
-        
+        # Parse response
+        response_text = response.text
+        # Remove code blocks if present
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0]
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].split("```")[0]
+            
         # Parse JSON
-        compatibility_results = json.loads(result_text)
+        results = json.loads(response_text.strip())
+        print(f"Parsed JSON: {json.dumps(results, indent=2)}")
         
-        return compatibility_results
+        # Ensure all part_ids are strings
+        for result in results:
+            if "part_id" in result:
+                result["part_id"] = str(result["part_id"])
+                if "incompatibility" in result:
+                    result["incompatibility"] = {
+                        str(k): v for k, v in result["incompatibility"].items()
+                    }
+        
+        return results
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
+        print(f"Error in LLM compatibility check: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise Exception(f"Error in LLM compatibility check: {str(e)}")
 
-# --- Compatibility Graph Functions ---
 def extract_compatibility_edges(
     llm_response: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
@@ -312,14 +261,22 @@ def extract_compatibility_edges(
     edges = []
     processed_pairs = set()  # Track processed part pairs to avoid duplicates
     
+    print(f"EXTRACTING EDGES FROM: {json.dumps(llm_response[:2], indent=2)}")
+    
     for part_result in llm_response:
         part_id = part_result.get("part_id")
+        print(f"Processing part_id: {part_id}, type: {type(part_id)}")
+        
         if not part_id or part_result.get("available", True):
+            print(f"Skipping part {part_id} - available: {part_result.get('available', True)}")
             continue  # Skip compatible parts
         
         incompatibility = part_result.get("incompatibility", {})
         if not incompatibility:
+            print(f"No incompatibilities for part {part_id}")
             continue
+        
+        print(f"Incompatibilities for {part_id}: {json.dumps(incompatibility)}")
         
         for incompatible_part_id_str, reason in incompatibility.items():
             try:
@@ -330,12 +287,15 @@ def extract_compatibility_edges(
                 part_id_str = str(part_id)
                 incompatible_part_id_str = str(incompatible_part_id)
                 
+                print(f"Creating edge for {part_id_str} <-> {incompatible_part_id_str}")
+                
                 # Sort part IDs to ensure consistent edge representation
                 part_ids = sorted([part_id_str, incompatible_part_id_str])
                 pair_key = f"{part_ids[0]}_{part_ids[1]}"
                 
                 # Skip if this pair has already been processed
                 if pair_key in processed_pairs:
+                    print(f"Skipping duplicate pair: {pair_key}")
                     continue
                 
                 processed_pairs.add(pair_key)
@@ -347,173 +307,130 @@ def extract_compatibility_edges(
                 }
                 
                 edges.append(edge)
+                print(f"Added edge: {json.dumps(edge)}")
                 
             except Exception as e:
                 # Skip invalid part IDs
                 print(f"Error processing part ID: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 continue
     
+    print(f"EXTRACTED EDGES: {json.dumps(edges)}")
     return edges
 
-def update_system_compatibility_graph(system_id: str, new_edges: List[Dict[str, Any]]) -> None:
+async def update_system_compatibility_graph(edges: List[Dict[str, Any]]) -> None:
     """
-    Update the compatibility graph in a system record
+    Update compatibility graph in Supabase
     
     Args:
-        system_id: ID of the system to update
-        new_edges: New compatibility edges to add
-        
-    Raises:
-        HTTPException: If the system cannot be found or updated
+        edges: List of compatibility graph edges to update
     """
-    # Get current compatibility graph
-    system_response = supabase.table("systems").select("compatibility_graph").eq("id", system_id).execute()
-    
-    if not system_response.data:
-        raise HTTPException(status_code=404, detail=f"System with ID {system_id} not found")
-    
-    current_graph = system_response.data[0].get("compatibility_graph", {"edges": []})
-    
-    # Ensure current_graph has an edges array
-    if not current_graph or "edges" not in current_graph:
-        current_graph = {"edges": []}
-    
-    # Track existing edges to avoid duplicates
-    existing_edge_keys = set()
-    for edge in current_graph.get("edges", []):
-        part_ids = edge.get("part_ids", [])
-        if len(part_ids) >= 2:
-            # Sort part IDs for consistent representation
-            # 모든 part_id를 문자열로 변환
-            part_ids_str = [str(p_id) for p_id in part_ids]
-            part_ids_str = sorted(part_ids_str)
-            edge_key = f"{part_ids_str[0]}_{part_ids_str[1]}"
-            existing_edge_keys.add(edge_key)
-    
-    # Add new edges if they don't already exist
-    edges_to_add = []
-    for edge in new_edges:
-        part_ids = edge.get("part_ids", [])
-        if len(part_ids) < 2:
-            continue  # Skip invalid edges
-        
-        # Ensure part_ids are sorted and are strings
-        part_ids_str = [str(p_id) for p_id in part_ids]
-        part_ids_str = sorted(part_ids_str)
-        edge["part_ids"] = part_ids_str
-        
-        # Create edge key for duplicate checking
-        edge_key = f"{part_ids_str[0]}_{part_ids_str[1]}"
-        
-        if edge_key not in existing_edge_keys:
-            edges_to_add.append(edge)
-            existing_edge_keys.add(edge_key)
-    
-    # Update compatibility graph with new edges
-    if edges_to_add:
-        current_graph["edges"].extend(edges_to_add)
-        
-        # Update the system record
-        update_response = supabase.table("systems").update({"compatibility_graph": current_graph}).eq("id", system_id).execute()
-        
-        if not update_response.data:
-            raise HTTPException(status_code=500, detail=f"Failed to update compatibility graph for system {system_id}")
-
-# --- API Endpoints ---
-@app.get("/api/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
-
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {"message": "Part Compatibility API", "status": "running"}
-
-@app.post("/api/debug")
-async def debug_info(request: CompatibilityCheckRequest):
-    """
-    Debug endpoint to inspect how part IDs are processed
-    """
-    part_ids = request.part_ids
-    
     try:
-        # 1. Get parts information
-        parts = get_parts_info(part_ids)
+        # Get existing compatibility graph
+        response = supabase.table("compatibility_graph").select("*").execute()
+        existing_edges = response.data if response.data else []
         
-        # 2. Get subsystems info
-        subsystems = get_subsystems_for_parts(part_ids)
+        # Convert existing edges to set of part ID pairs for easy comparison
+        existing_pairs = set()
+        for edge in existing_edges:
+            # part_ids를 문자열로 변환하여 저장
+            part_ids = [str(pid) for pid in edge["part_ids"]]
+            existing_pairs.add(tuple(sorted(part_ids)))
         
-        # Return debugging info
+        # Add new edges
+        for edge in edges:
+            # edge의 part_ids를 문자열로 변환
+            part_ids = [str(pid) for pid in edge["part_ids"]]
+            part_ids = sorted(part_ids)
+            
+            # Check if edge already exists
+            if tuple(part_ids) not in existing_pairs:
+                # Insert new edge
+                supabase.table("compatibility_graph").insert({
+                    "part_ids": part_ids,
+                    "reason": edge["reason"]
+                }).execute()
+                
+    except Exception as e:
+        print(f"Error updating compatibility graph: {str(e)}")
+        raise Exception(f"Error updating compatibility graph: {str(e)}")
+
+@app.post("/api/compatibility-check")
+async def compatibility_check(request: CompatibilityRequest):
+    """
+    Check compatibility between parts
+    """
+    try:
+        print(f"Received compatibility check request: {json.dumps(request.dict())}")
+        
+        # Get parts info
+        parts_info = await get_parts_info(request.part_ids)
+        print(f"Parts info: {json.dumps(parts_info)}")
+        
+        # Get subsystems for parts
+        subsystems = await get_subsystems_for_parts(request.part_ids)
+        print(f"Subsystems: {json.dumps(subsystems)}")
+        
+        # Get systems for subsystems
+        systems = await get_systems_for_subsystems([s["id"] for s in subsystems])
+        print(f"Systems: {json.dumps(systems)}")
+        
+        # Check compatibility with LLM
+        llm_response = await check_compatibility_with_llm(parts_info, subsystems, systems)
+        print(f"LLM response: {json.dumps(llm_response)}")
+        
+        # Extract compatibility edges
+        edges = extract_compatibility_edges(llm_response)
+        print(f"Extracted edges: {json.dumps(edges)}")
+        
+        # Update compatibility graph
+        await update_system_compatibility_graph(edges)
+        print("Updated compatibility graph")
+        
         return {
-            "part_ids_received": part_ids,
-            "parts_type": str(type(parts)),
-            "parts": parts,
-            "parts_id_types": [{"id": p["id"], "type": str(type(p["id"]))} for p in parts],
+            "parts": parts_info,
             "subsystems": subsystems,
-            "subsystems_part_ids_types": [
-                {
-                    "subsystem_id": s["id"],
-                    "part_ids": s.get("part_ids", []),
-                    "part_ids_types": [str(type(p_id)) for p_id in s.get("part_ids", [])]
-                } 
-                for s in subsystems
-            ]
+            "systems": systems,
+            "compatibility_edges": edges
         }
         
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Error in debug: {str(e)}")
+        print(f"Error in compatibility check: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing compatibility check: {str(e)}"
+        )
 
-@app.post("/api/compatibility-check", response_model=List[CompatibilityCheckResponse])
-async def check_compatibility(request: CompatibilityCheckRequest):
+@app.post("/api/debug")
+async def debug_endpoint(request: CompatibilityRequest):
     """
-    Check compatibility between multiple parts
-    
-    Args:
-        request: Compatibility check request containing part IDs
-        
-    Returns:
-        List of compatibility check results
+    Debug endpoint to check part information and system hierarchy
     """
-    part_ids = request.part_ids
-    
-    if not part_ids:
-        raise HTTPException(status_code=400, detail="No part IDs provided")
-    
-    if len(part_ids) < 2:
-        raise HTTPException(status_code=400, detail="At least two part IDs are required for compatibility check")
-    
     try:
-        # 1. Get parts information
-        parts = get_parts_info(part_ids)
+        # Get parts info
+        parts = await get_parts_info(request.part_ids)
         
-        # 2. Get systems for updating the compatibility graph later
-        # We still need subsystems and systems for the LLM format and to update compatibility graphs
-        subsystems, systems = get_subsystems_and_systems_for_parts(part_ids)
+        # Get subsystems for parts
+        subsystems = await get_subsystems_for_parts(request.part_ids)
         
-        # 3. Format LLM input with specified field order
-        formatted_parts = format_llm_input(parts, subsystems, systems)
+        # Get systems for subsystems
+        systems = await get_systems_for_subsystems([s["id"] for s in subsystems])
         
-        # 4. Perform compatibility check using Gemini LLM
-        compatibility_results = check_compatibility_with_llm(formatted_parts)
-        
-        # 5. Extract compatibility edges (without subsystem info)
-        edges = extract_compatibility_edges(compatibility_results)
-        
-        # 6. Update compatibility graphs in all related systems
-        for system in systems:
-            update_system_compatibility_graph(system["id"], edges)
-        
-        # 7. Return compatibility results
-        return compatibility_results
+        return {
+            "parts": parts,
+            "subsystems": subsystems,
+            "systems": systems
+        }
         
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Error processing compatibility check: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error in debug endpoint: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run(app, host="0.0.0.0", port=8000)
