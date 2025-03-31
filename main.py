@@ -1,89 +1,66 @@
+import os
+import json
+from typing import List, Dict, Any, Optional, Tuple, Set
+from datetime import datetime
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-import os
-from dotenv import load_dotenv
-import logging
-from typing import List, Dict, Any, Optional, Tuple
-import json
-import google.generativeai as genai
 from supabase import create_client, Client
+import google.generativeai as genai
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-log_level = getattr(logging, os.getenv("LOG_LEVEL", "INFO"))
-logging.basicConfig(
-    level=log_level,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+# Initialize FastAPI app
+app = FastAPI(title="Part Compatibility API")
 
 # Initialize Supabase client
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
-
-if not supabase_url or not supabase_key:
-    logger.error("Supabase URL or key is missing")
-    raise ValueError("Supabase URL and key must be provided in environment variables")
-
 supabase: Client = create_client(supabase_url, supabase_key)
 
-# Initialize Google AI API
-google_api_key = os.getenv("GOOGLE_API_KEY")
+# Initialize Google Gemini client
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 model_name = os.getenv("GOOGLE_MODEL_NAME", "gemini-2.0-flash-thinking-exp")
 
-if not google_api_key:
-    logger.error("Google API key is missing")
-    raise ValueError("Google API key must be provided in environment variables")
-
-genai.configure(api_key=google_api_key)
-
-# Initialize FastAPI
-app = FastAPI(
-    title="Part Compatibility API",
-    description="API for checking compatibility between parts using Google Gemini LLM",
-    version="1.0.0"
-)
-
-# --- Request and Response Models ---
+# --- Data Models ---
 class CompatibilityCheckRequest(BaseModel):
-    part_ids: List[int] = Field(..., description="List of part IDs to check compatibility between")
+    """Request model for compatibility check endpoint"""
+    part_ids: List[str] = Field(..., description="List of part IDs to check compatibility between")
 
 class CompatibilityCheckResponse(BaseModel):
-    part_id: int = Field(..., description="Part ID")
+    """Response model for a single part compatibility result"""
+    part_id: str = Field(..., description="Part ID")
     product_name: str = Field(..., description="Product name")
-    available: bool = Field(..., description="Whether the part is compatible with other parts in the request")
-    incompatibility: Optional[Dict[str, str]] = Field(None, description="Map of incompatible part IDs to reasons")
+    available: bool = Field(..., description="Whether the part is compatible with other parts")
+    incompatibility: Optional[Dict[str, str]] = Field(None, description="Incompatibility details if available is false")
 
-# --- Database Access Functions ---
-def get_parts_info(part_ids: List[int]) -> List[Dict[str, Any]]:
+# --- Data Collection Functions ---
+def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
-    Get information about parts from the database
+    Get information about specified parts
     
     Args:
-        part_ids: List of part IDs
+        part_ids: List of part IDs to retrieve
         
     Returns:
         List of part information dictionaries
+        
+    Raises:
+        HTTPException: If parts cannot be found
     """
     if not part_ids:
         return []
+        
+    response = supabase.table("parts").select("*").in_("id", part_ids).execute()
     
-    parts = []
-    for part_id in part_ids:
-        response = supabase.table("parts").select("*").eq("id", part_id).execute()
-        if response.data:
-            parts.append(response.data[0])
+    if not response.data:
+        raise HTTPException(status_code=404, detail=f"No parts found with IDs: {part_ids}")
     
-    if len(parts) != len(part_ids):
-        found_ids = [part["id"] for part in parts]
-        missing_ids = [part_id for part_id in part_ids if part_id not in found_ids]
-        logger.warning(f"Parts not found: {missing_ids}")
-    
-    return parts
+    return response.data
 
-def get_subsystems_for_parts(part_ids: List[int]) -> List[Dict[str, Any]]:
+def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get subsystems that contain the specified parts
     
@@ -100,16 +77,22 @@ def get_subsystems_for_parts(part_ids: List[int]) -> List[Dict[str, Any]]:
     subsystems = []
     
     for part_id in part_ids:
-        response = supabase.table("subsystems").select("*").contains("part_ids", [part_id]).execute()
-        if response.data:
-            for subsystem in response.data:
-                # Avoid duplicate subsystems
-                if not any(s["id"] == subsystem["id"] for s in subsystems):
-                    subsystems.append(subsystem)
+        try:
+            # part_ids in subsystems is numeric array, so convert the string ID to numeric
+            numeric_part_id = float(part_id)
+            response = supabase.table("subsystems").select("*").contains("part_ids", [numeric_part_id]).execute()
+            if response.data:
+                for subsystem in response.data:
+                    # Avoid duplicate subsystems
+                    if not any(s["id"] == subsystem["id"] for s in subsystems):
+                        subsystems.append(subsystem)
+        except ValueError:
+            # Skip if part_id is not a valid number
+            continue
     
     return subsystems
 
-def get_systems_for_subsystems(subsystem_ids: List[int]) -> List[Dict[str, Any]]:
+def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get systems that contain the specified subsystems
     
@@ -122,11 +105,11 @@ def get_systems_for_subsystems(subsystem_ids: List[int]) -> List[Dict[str, Any]]
     if not subsystem_ids:
         return []
     
-    # This query finds systems where subsystem_ids array contains any of the specified subsystem_ids
     systems = []
     
     for subsystem_id in subsystem_ids:
-        response = supabase.table("systems").select("*").contains("subsystem_ids", [str(subsystem_id)]).execute()
+        # subsystem_ids in systems table are stored as strings within the array
+        response = supabase.table("systems").select("*").contains("subsystem_ids", [subsystem_id]).execute()
         if response.data:
             for system in response.data:
                 # Avoid duplicate systems
@@ -135,7 +118,7 @@ def get_systems_for_subsystems(subsystem_ids: List[int]) -> List[Dict[str, Any]]
     
     return systems
 
-def get_subsystems_and_systems_for_parts(part_ids: List[int]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def get_subsystems_and_systems_for_parts(part_ids: List[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Get subsystems and systems related to the specified parts
     
@@ -176,7 +159,8 @@ def format_llm_input(
         subsystem_id = subsystem["id"]
         part_ids = subsystem.get("part_ids", [])
         for part_id in part_ids:
-            part_to_subsystem[part_id] = subsystem
+            # Convert numeric part_id to string for consistent key type
+            part_to_subsystem[str(part_id)] = subsystem
     
     # Create mapping from subsystem ID to system
     subsystem_to_system = {}
@@ -184,15 +168,21 @@ def format_llm_input(
         system_id = system["id"]
         subsystem_ids = system.get("subsystem_ids", [])
         for subsystem_id in subsystem_ids:
-            try:
-                # subsystem_ids in systems table are stored as strings, convert to int for comparison
-                subsystem_to_system[int(subsystem_id)] = system
-            except (ValueError, TypeError):
-                pass
+            # subsystem_ids are already strings in the system table
+            subsystem_to_system[subsystem_id] = system
     
     for part in parts:
         part_id = part["id"]
+        # Use string part_id for lookup since we standardized the mapping keys to strings
         subsystem = part_to_subsystem.get(part_id)
+        if not subsystem:
+            # Try again with numeric conversion (to handle case where IDs might be stored as numbers)
+            try:
+                numeric_id = float(part_id)
+                subsystem = part_to_subsystem.get(str(numeric_id))
+            except:
+                pass
+        
         subsystem_id = subsystem["id"] if subsystem else None
         system = subsystem_to_system.get(subsystem_id) if subsystem_id else None
         
@@ -263,10 +253,12 @@ def check_compatibility_with_llm(formatted_parts: List[Dict[str, Any]]) -> List[
     {json.dumps(formatted_parts, indent=2)}
     
     Return a JSON array with one object per part, where each object contains:
-    - part_id: The integer ID of the part
+    - part_id: The part ID as a string (exactly as provided in the input)
     - product_name: The product_name string of the part
     - available: A boolean indicating whether the part is compatible with other parts
     - incompatibility: If available is true, set this to null. If available is false, provide an object where each key is an incompatible part's ID (as a string) and each value is a string explaining the reason for incompatibility
+    
+    IMPORTANT: Always preserve the exact format of part_id as provided in the input. Do not change it to a number, keep it as a string.
     
     Ensure that a part's available status is set to false ONLY when it has a direct incompatibility with another part.
     """
@@ -342,7 +334,8 @@ def extract_compatibility_edges(
         
         for incompatible_part_id_str, reason in incompatibility.items():
             try:
-                incompatible_part_id = int(incompatible_part_id_str)
+                # 이미 문자열이므로 변환할 필요 없음
+                incompatible_part_id = incompatible_part_id_str
                 
                 # Sort part IDs to ensure consistent edge representation
                 part_ids = sorted([part_id, incompatible_part_id])
@@ -362,13 +355,13 @@ def extract_compatibility_edges(
                 
                 edges.append(edge)
                 
-            except (ValueError, TypeError):
+            except Exception:
                 # Skip invalid part IDs
                 continue
     
     return edges
 
-def update_system_compatibility_graph(system_id: int, new_edges: List[Dict[str, Any]]) -> None:
+def update_system_compatibility_graph(system_id: str, new_edges: List[Dict[str, Any]]) -> None:
     """
     Update the compatibility graph in a system record
     
@@ -430,19 +423,15 @@ def update_system_compatibility_graph(system_id: int, new_edges: List[Dict[str, 
             raise HTTPException(status_code=500, detail=f"Failed to update compatibility graph for system {system_id}")
 
 # --- API Endpoints ---
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
 @app.get("/")
 async def root():
-    """
-    Root endpoint
-    
-    Returns:
-        Basic API information
-    """
-    return {
-        "message": "Part Compatibility API",
-        "version": "1.0.0",
-        "documentation": "/docs"
-    }
+    """Root endpoint"""
+    return {"message": "Part Compatibility API", "status": "running"}
 
 @app.post("/api/compatibility-check", response_model=List[CompatibilityCheckResponse])
 async def check_compatibility(request: CompatibilityCheckRequest):
@@ -491,3 +480,7 @@ async def check_compatibility(request: CompatibilityCheckRequest):
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=500, detail=f"Error processing compatibility check: {str(e)}")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
