@@ -81,14 +81,29 @@ async def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
     subsystems = []
     seen_subsystem_ids = set()
     
+    # Ensure input part_ids are strings
+    part_ids = [str(pid) for pid in part_ids]
+    print(f"Querying subsystems for part IDs (as strings): {part_ids}")
+
     for part_id in part_ids:
-        # part_id를 문자열로 사용
-        response = supabase.table("subsystems").select("*").contains("part_ids", [part_id]).execute()
-        
-        for subsystem in response.data:
-            if subsystem["id"] not in seen_subsystem_ids:
-                subsystems.append(subsystem)
-                seen_subsystem_ids.add(subsystem["id"])
+        try:
+            # part_id를 문자열로 사용하여 쿼리
+            response = supabase.table("subsystems").select("*").contains("part_ids", [part_id]).execute()
+            
+            for subsystem in response.data:
+                subsystem_id_str = str(subsystem["id"]) # ID를 문자열로 변환
+                if subsystem_id_str not in seen_subsystem_ids:
+                    # 모든 관련 ID를 문자열로 변환하여 저장
+                    subsystem["id"] = subsystem_id_str
+                    subsystem["part_ids"] = [str(pid) for pid in subsystem.get("part_ids", [])]
+                    subsystems.append(subsystem)
+                    seen_subsystem_ids.add(subsystem_id_str)
+                    print(f"Found subsystem (IDs as strings): {json.dumps(subsystem)}")
+
+        except Exception as e:
+            print(f"Error getting subsystems for part ID {part_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
                 
     return subsystems
 
@@ -104,15 +119,30 @@ async def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str,
     """
     systems = []
     seen_system_ids = set()
+
+    # Ensure input subsystem_ids are strings
+    subsystem_ids = [str(sid) for sid in subsystem_ids]
+    print(f"Querying systems for subsystem IDs (as strings): {subsystem_ids}")
     
     for subsystem_id in subsystem_ids:
-        # subsystem_id를 문자열로 사용
-        response = supabase.table("systems").select("*").contains("subsystem_ids", [subsystem_id]).execute()
-        
-        for system in response.data:
-            if system["id"] not in seen_system_ids:
-                systems.append(system)
-                seen_system_ids.add(system["id"])
+        try:
+            # subsystem_id를 문자열로 사용하여 쿼리
+            response = supabase.table("systems").select("*").contains("subsystem_ids", [subsystem_id]).execute()
+            
+            for system in response.data:
+                system_id_str = str(system["id"]) # ID를 문자열로 변환
+                if system_id_str not in seen_system_ids:
+                    # 모든 관련 ID를 문자열로 변환하여 저장
+                    system["id"] = system_id_str
+                    system["subsystem_ids"] = [str(sid) for sid in system.get("subsystem_ids", [])]
+                    systems.append(system)
+                    seen_system_ids.add(system_id_str)
+                    print(f"Found system (IDs as strings): {json.dumps(system)}")
+
+        except Exception as e:
+            print(f"Error getting systems for subsystem ID {subsystem_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
                 
     return systems
 
