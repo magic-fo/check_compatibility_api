@@ -42,13 +42,31 @@ async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
     Returns:
         List of part information dictionaries
     """
-    parts = []
-    for part_id in part_ids:
-        # part_id를 문자열로 처리
-        response = supabase.table("parts").select("*").eq("id", part_id).execute()
+    try:
+        # Convert all part_ids to strings
+        part_ids = [str(pid) for pid in part_ids]
+        print(f"Querying parts with IDs (as strings): {part_ids}")
+        
+        # Query all parts at once
+        response = supabase.table("parts").select("*").in_("id", part_ids).execute()
+        
         if response.data:
-            parts.append(response.data[0])
-    return parts
+            # Convert IDs to strings
+            parts = []
+            for part in response.data:
+                part["id"] = str(part["id"])
+                parts.append(part)
+                print(f"Found part: {json.dumps(part)}")
+            return parts
+        else:
+            print(f"No parts found with IDs: {part_ids}")
+            return []
+            
+    except Exception as e:
+        print(f"Error getting parts info: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return []
 
 async def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
