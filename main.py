@@ -154,8 +154,8 @@ def format_llm_input(
         subsystem_id = subsystem["id"]
         part_ids = subsystem.get("part_ids", [])
         for part_id in part_ids:
-            # ID는 이미 문자열이므로 변환 불필요
-            part_to_subsystem[part_id] = subsystem
+            # 데이터베이스에서 반환된 정수 ID를 문자열로 변환
+            part_to_subsystem[str(part_id)] = subsystem
     
     # Create mapping from subsystem ID to system
     subsystem_to_system = {}
@@ -164,15 +164,18 @@ def format_llm_input(
         subsystem_ids = system.get("subsystem_ids", [])
         for subsystem_id in subsystem_ids:
             # subsystem_ids are already strings in the system table
-            subsystem_to_system[subsystem_id] = system
+            subsystem_to_system[str(subsystem_id)] = system
     
     for part in parts:
         part_id = part["id"]
+        # 데이터베이스에서 반환된 정수 ID를 문자열로 변환
+        part_id_str = str(part_id)
         # Use string part_id for lookup since we standardized the mapping keys to strings
-        subsystem = part_to_subsystem.get(part_id)
+        subsystem = part_to_subsystem.get(part_id_str)
         
         subsystem_id = subsystem["id"] if subsystem else None
-        system = subsystem_to_system.get(subsystem_id) if subsystem_id else None
+        subsystem_id_str = str(subsystem_id) if subsystem_id else None
+        system = subsystem_to_system.get(subsystem_id_str) if subsystem_id_str else None
         
         # Format part info in the specified field order
         formatted_part = {
@@ -181,7 +184,7 @@ def format_llm_input(
             "subsystem_description": subsystem.get("subsystem_description", "") if subsystem else "",
             "part_name": part.get("part_name", ""),
             "product_name": part.get("product_name", ""),
-            "part_id": part_id,
+            "part_id": part_id_str,  # 문자열로 변환된 ID 사용
             "part_description": part.get("part_description", ""),
             "specifications": part.get("specifications", {}),
             "dimensions": part.get("dimensions", {}),
@@ -320,11 +323,15 @@ def extract_compatibility_edges(
         
         for incompatible_part_id_str, reason in incompatibility.items():
             try:
-                # 이미 문자열이므로 변환할 필요 없음
+                # 문자열 ID 사용
                 incompatible_part_id = incompatible_part_id_str
                 
+                # LLM 응답으로부터 받은 part_id와 incompatible_part_id는 모두 문자열이어야 함
+                part_id_str = str(part_id)
+                incompatible_part_id_str = str(incompatible_part_id)
+                
                 # Sort part IDs to ensure consistent edge representation
-                part_ids = sorted([part_id, incompatible_part_id])
+                part_ids = sorted([part_id_str, incompatible_part_id_str])
                 pair_key = f"{part_ids[0]}_{part_ids[1]}"
                 
                 # Skip if this pair has already been processed
@@ -341,8 +348,9 @@ def extract_compatibility_edges(
                 
                 edges.append(edge)
                 
-            except Exception:
+            except Exception as e:
                 # Skip invalid part IDs
+                print(f"Error processing part ID: {str(e)}")
                 continue
     
     return edges
@@ -376,8 +384,10 @@ def update_system_compatibility_graph(system_id: str, new_edges: List[Dict[str, 
         part_ids = edge.get("part_ids", [])
         if len(part_ids) >= 2:
             # Sort part IDs for consistent representation
-            part_ids = sorted(part_ids)
-            edge_key = f"{part_ids[0]}_{part_ids[1]}"
+            # 모든 part_id를 문자열로 변환
+            part_ids_str = [str(p_id) for p_id in part_ids]
+            part_ids_str = sorted(part_ids_str)
+            edge_key = f"{part_ids_str[0]}_{part_ids_str[1]}"
             existing_edge_keys.add(edge_key)
     
     # Add new edges if they don't already exist
@@ -387,12 +397,13 @@ def update_system_compatibility_graph(system_id: str, new_edges: List[Dict[str, 
         if len(part_ids) < 2:
             continue  # Skip invalid edges
         
-        # Ensure part_ids are sorted
-        part_ids = sorted(part_ids)
-        edge["part_ids"] = part_ids
+        # Ensure part_ids are sorted and are strings
+        part_ids_str = [str(p_id) for p_id in part_ids]
+        part_ids_str = sorted(part_ids_str)
+        edge["part_ids"] = part_ids_str
         
         # Create edge key for duplicate checking
-        edge_key = f"{part_ids[0]}_{part_ids[1]}"
+        edge_key = f"{part_ids_str[0]}_{part_ids_str[1]}"
         
         if edge_key not in existing_edge_keys:
             edges_to_add.append(edge)
