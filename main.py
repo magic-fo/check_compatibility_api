@@ -100,10 +100,10 @@ def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]
     if not subsystem_ids:
         return []
     
+    # This query finds systems where subsystem_ids array contains any of the specified subsystem_ids
     systems = []
     
     for subsystem_id in subsystem_ids:
-        # subsystem_ids in systems table are stored as strings within the array
         response = supabase.table("systems").select("*").contains("subsystem_ids", [subsystem_id]).execute()
         if response.data:
             for system in response.data:
@@ -115,7 +115,7 @@ def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]
 
 def get_subsystems_and_systems_for_parts(part_ids: List[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Get subsystems and systems related to the specified parts
+    Get both subsystems and systems related to the specified parts
     
     Args:
         part_ids: List of part IDs
@@ -154,8 +154,8 @@ def format_llm_input(
         subsystem_id = subsystem["id"]
         part_ids = subsystem.get("part_ids", [])
         for part_id in part_ids:
-            # Convert numeric part_id to string for consistent key type
-            part_to_subsystem[str(part_id)] = subsystem
+            # ID는 이미 문자열이므로 변환 불필요
+            part_to_subsystem[part_id] = subsystem
     
     # Create mapping from subsystem ID to system
     subsystem_to_system = {}
@@ -170,13 +170,6 @@ def format_llm_input(
         part_id = part["id"]
         # Use string part_id for lookup since we standardized the mapping keys to strings
         subsystem = part_to_subsystem.get(part_id)
-        if not subsystem:
-            # Try again with numeric conversion (to handle case where IDs might be stored as numbers)
-            try:
-                numeric_id = float(part_id)
-                subsystem = part_to_subsystem.get(str(numeric_id))
-            except:
-                pass
         
         subsystem_id = subsystem["id"] if subsystem else None
         system = subsystem_to_system.get(subsystem_id) if subsystem_id else None
@@ -207,100 +200,98 @@ def check_compatibility_with_llm(formatted_parts: List[Dict[str, Any]]) -> List[
         formatted_parts: List of formatted part information dictionaries
         
     Returns:
-        List of compatibility results
-        
-    Raises:
-        HTTPException: If the LLM API call fails
+        List of compatibility check results
     """
-    # System instruction for the LLM
-    system_instruction = """
-    Goal:
-    You must evaluate and verify the compatibility of mechanical parts with other parts in the subsystem using their detailed specifications, dimensions, and attributes.
-
-    Criteria for Compatibility and Interchangeability Inspection Between Parts:
-    - Physical Interface Compatibility
-        - Dimensional Verification: Confirm critical dimensions and tolerance matching.
-        - Mechanical Connections: Ensure exact matching of threads, keyways, splines, flanges, etc.
-        - Mounting Structure: Verify that mounting hole positions, diameters, and patterns match exactly.
-    - Functional Compatibility
-        - Performance Parameter Verification: Compare key performance indicators such as torque, output, flow rate, pressure, etc.
-        - Operating Range Compatibility: Confirm compatibility of RPM, load range, pressure range, etc.
-        - System Responsiveness: Verify that response time and acceleration/deceleration characteristics match.
-        - Operating Characteristics: Evaluate the impact of vibration, noise, and heat generation on overall system performance.
-    - Electrical/Electronic Compatibility
-        - Electrical Specifications: Match voltage, current, impedance, and frequency requirements.
-        - Connector Compatibility: Verify matching of pin layout, connector type, and size.
-        - Signal Interface: Ensure communication protocols and signal levels are compatible.
-        - EMI/EMC Characteristics: Evaluate electromagnetic interference generation and immunity.
-    - Material and Environmental Compatibility
-        - Thermal Expansion Characteristics: Predict issues caused by differences in thermal expansion coefficients between materials.
-        - Temperature Influence Zone: Assess the thermal impact of heat-generating components on surrounding parts.
-    - Practical Verification Methods
-        - Durability Testing: Verify compatibility issues such as wear and fatigue during long-term use.
-        - Boundary Condition Testing: Verify performance under extreme conditions including maximum/minimum loads, temperatures, speeds, etc.
-    """
+    if not formatted_parts:
+        return []
     
-    # User prompt with formatted parts
+    if len(formatted_parts) == 1:
+        # Single part is always compatible with itself
+        part = formatted_parts[0]
+        return [{
+            "part_id": part["part_id"],
+            "product_name": part["product_name"],
+            "available": True,
+            "incompatibility": {}
+        }]
+    
+    # Format parts as JSON for LLM
+    parts_json = json.dumps(formatted_parts, indent=2)
+    
+    # Create prompt for Gemini
     prompt = f"""
-    Please evaluate the compatibility between the following parts:
-    
-    Parts:
-    {json.dumps(formatted_parts, indent=2)}
-    
-    Return a JSON array with one object per part, where each object contains:
-    - part_id: The part ID as a string (exactly as provided in the input)
-    - product_name: The product_name string of the part
-    - available: A boolean indicating whether the part is compatible with other parts
-    - incompatibility: If available is true, set this to null. If available is false, provide an object where each key is an incompatible part's ID (as a string) and each value is a string explaining the reason for incompatibility
-    
-    IMPORTANT: Always preserve the exact format of part_id as provided in the input. Do not change it to a number, keep it as a string.
-    
-    Ensure that a part's available status is set to false ONLY when it has a direct incompatibility with another part.
+You are a domain expert in part compatibility analysis.
+
+# PARTS INFORMATION
+I'm providing you with a list of parts in JSON format:
+{parts_json}
+
+# TASK
+Please analyze whether these parts are compatible with each other. For each part, provide:
+
+1. part_id (as a string, NOT converted to a number)
+2. product_name
+3. available (boolean: true if compatible with all other parts, false if not)
+4. incompatibility (if available is false, list incompatible part_ids as keys with reasons as values)
+
+# OUTPUT FORMAT
+Respond with a JSON array containing one object per part, like this example:
+```json
+[
+  {{
+    "part_id": "1234", // Must be a string exactly as provided, do not convert to number
+    "product_name": "Product A",
+    "available": true,
+    "incompatibility": {{}}
+  }},
+  {{
+    "part_id": "5678", // Must be a string exactly as provided, do not convert to number
+    "product_name": "Product B",
+    "available": false,
+    "incompatibility": {{
+      "1234": "Reason for incompatibility with part 1234"
+    }}
+  }}
+]
+```
+
+# COMPATIBILITY ANALYSIS
+Analyze compatibility based on:
+1. System/subsystem compatibility
+2. Physical dimensions
+3. Specifications
+4. Functional requirements
+
+Important:
+- ONLY return the JSON array
+- DO NOT include explanations
+- Carefully examine each part's specifications
+- Return ALL part_ids as STRINGS exactly as provided, not as numbers or in a different format
     """
-    
-    # Configure Gemini model
-    generation_config = {
-        "temperature": 0.7,
-        "top_p": 0.95,
-        "response_mime_type": "application/json",
-    }
     
     try:
-        # Initialize Gemini model with system instruction
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config=generation_config,
-            system_instruction=system_instruction
-        )
-        
-        # Generate response
+        # Generate content using Gemini
+        model = genai.GenerativeModel(model_name)
         response = model.generate_content(prompt)
         
-        # Parse response text as JSON
-        try:
-            result = json.loads(response.text)
-            return result
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown if wrapped in code blocks
-            import re
-            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response.text, re.MULTILINE)
-            if json_match:
-                try:
-                    result = json.loads(json_match.group(1))
-                    return result
-                except json.JSONDecodeError:
-                    pass
-            
-            # If still not valid JSON, raise exception
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Failed to parse LLM response as JSON. Response: {response.text[:500]}..."
-            )
+        # Parse the response
+        result_text = response.text
+        
+        # Extract JSON if enclosed in code blocks
+        if "```json" in result_text and "```" in result_text:
+            # Extract content between ```json and ```
+            result_text = result_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in result_text:
+            # Extract content between ``` and ```
+            result_text = result_text.split("```")[1].split("```")[0].strip()
+        
+        # Parse JSON
+        compatibility_results = json.loads(result_text)
+        
+        return compatibility_results
+        
     except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error calling Gemini API: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
 
 # --- Compatibility Graph Functions ---
 def extract_compatibility_edges(
@@ -478,4 +469,4 @@ async def check_compatibility(request: CompatibilityCheckRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000"))) 
