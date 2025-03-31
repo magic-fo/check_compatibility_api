@@ -77,18 +77,13 @@ def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
     subsystems = []
     
     for part_id in part_ids:
-        try:
-            # part_ids in subsystems is numeric array, so convert the string ID to numeric
-            numeric_part_id = float(part_id)
-            response = supabase.table("subsystems").select("*").contains("part_ids", [numeric_part_id]).execute()
-            if response.data:
-                for subsystem in response.data:
-                    # Avoid duplicate subsystems
-                    if not any(s["id"] == subsystem["id"] for s in subsystems):
-                        subsystems.append(subsystem)
-        except ValueError:
-            # Skip if part_id is not a valid number
-            continue
+        # Direct query with string part_id
+        response = supabase.table("subsystems").select("*").contains("part_ids", [part_id]).execute()
+        if response.data:
+            for subsystem in response.data:
+                # Avoid duplicate subsystems
+                if not any(s["id"] == subsystem["id"] for s in subsystems):
+                    subsystems.append(subsystem)
     
     return subsystems
 
