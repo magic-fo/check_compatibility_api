@@ -32,7 +32,7 @@ app.add_middleware(
 class CompatibilityRequest(BaseModel):
     part_ids: List[str]
 
-def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
+async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get part information from Supabase
     
@@ -50,7 +50,7 @@ def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
             parts.append(response.data[0])
     return parts
 
-def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
+async def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get subsystems that contain the specified parts
     
@@ -74,7 +74,7 @@ def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
                 
     return subsystems
 
-def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]:
+async def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get systems that contain the specified subsystems
     
