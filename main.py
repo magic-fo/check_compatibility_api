@@ -419,6 +419,42 @@ async def root():
     """Root endpoint"""
     return {"message": "Part Compatibility API", "status": "running"}
 
+@app.post("/api/debug")
+async def debug_info(request: CompatibilityCheckRequest):
+    """
+    Debug endpoint to inspect how part IDs are processed
+    """
+    part_ids = request.part_ids
+    
+    try:
+        # 1. Get parts information
+        parts = get_parts_info(part_ids)
+        
+        # 2. Get subsystems info
+        subsystems = get_subsystems_for_parts(part_ids)
+        
+        # Return debugging info
+        return {
+            "part_ids_received": part_ids,
+            "parts_type": str(type(parts)),
+            "parts": parts,
+            "parts_id_types": [{"id": p["id"], "type": str(type(p["id"]))} for p in parts],
+            "subsystems": subsystems,
+            "subsystems_part_ids_types": [
+                {
+                    "subsystem_id": s["id"],
+                    "part_ids": s.get("part_ids", []),
+                    "part_ids_types": [str(type(p_id)) for p_id in s.get("part_ids", [])]
+                } 
+                for s in subsystems
+            ]
+        }
+        
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Error in debug: {str(e)}")
+
 @app.post("/api/compatibility-check", response_model=List[CompatibilityCheckResponse])
 async def check_compatibility(request: CompatibilityCheckRequest):
     """
@@ -469,4 +505,4 @@ async def check_compatibility(request: CompatibilityCheckRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000"))) 
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
