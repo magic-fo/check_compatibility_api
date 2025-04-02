@@ -377,48 +377,101 @@ def extract_compatibility_edges(
     print(f"EXTRACTED EDGES: {json.dumps(edges)}")
     return edges
 
-async def update_system_compatibility_graph(edges: List[Dict[str, Any]]) -> None:
+async def update_system_compatibility_graph(edges: List[Dict[str, Any]], system_id: Optional[str] = None) -> None:
     """
-    Update compatibility graph in Supabase
+    Update compatibility graph in Supabase systems table
     
     Args:
         edges: List of compatibility graph edges to update
+        system_id: Optional system ID to update (if None, will attempt to find the system)
     """
     try:
-        # First check if the compatibility_graph table exists
-        try:
-            # Get existing compatibility graph
-            response = supabase.table("compatibility_graph").select("*").execute()
-            existing_edges = response.data if response.data else []
+        # If system_id is not provided, try to find the relevant system
+        if not system_id and len(edges) > 0:
+            # Get all systems to find the one that contains the parts
+            response = supabase.table("systems").select("*").execute()
+            systems = response.data
             
-            # Convert existing edges to set of part ID pairs for easy comparison
-            existing_pairs = set()
-            for edge in existing_edges:
-                # part_ids를 문자열로 변환하여 저장
-                part_ids = [str(pid) for pid in edge["part_ids"]]
-                existing_pairs.add(tuple(sorted(part_ids)))
-            
-            # Add new edges
+            # Find systems that might contain our parts
+            part_ids = set()
             for edge in edges:
-                # edge의 part_ids를 문자열로 변환
-                part_ids = [str(pid) for pid in edge["part_ids"]]
-                part_ids = sorted(part_ids)
+                part_ids.update(edge["part_ids"])
+            
+            # Find subsystems containing these parts
+            subsystems_response = supabase.table("subsystems").select("*").execute()
+            subsystems = subsystems_response.data
+            
+            relevant_subsystem_ids = set()
+            for subsystem in subsystems:
+                subsystem_part_ids = set(str(pid) for pid in subsystem.get("part_ids", []))
+                if subsystem_part_ids.intersection(part_ids):
+                    relevant_subsystem_ids.add(str(subsystem["id"]))
+            
+            # Find the system containing these subsystems
+            for system in systems:
+                system_subsystem_ids = set(str(sid) for sid in system.get("subsystem_ids", []))
+                if system_subsystem_ids.intersection(relevant_subsystem_ids):
+                    system_id = str(system["id"])
+                    print(f"Found relevant system with ID: {system_id}")
+                    break
+        
+        if system_id:
+            # Get current compatibility graph for this system
+            response = supabase.table("systems").select("compatibility_graph").eq("id", system_id).execute()
+            
+            if response.data and len(response.data) > 0:
+                current_graph = response.data[0].get("compatibility_graph", {"edges": []})
                 
-                # Check if edge already exists
-                if tuple(part_ids) not in existing_pairs:
-                    # Insert new edge
-                    supabase.table("compatibility_graph").insert({
-                        "part_ids": part_ids,
-                        "reason": edge["reason"]
-                    }).execute()
-        except Exception as e:
-            # If the table doesn't exist or there's another error, just log it
-            # but don't stop the overall process
-            print(f"Warning: Could not update compatibility graph: {str(e)}")
-            print("The compatibility results will still be returned, but not stored in the database.")
+                # Make sure the structure is as expected
+                if not isinstance(current_graph, dict):
+                    current_graph = {"edges": []}
+                if "edges" not in current_graph:
+                    current_graph["edges"] = []
                 
+                # Convert existing edges to set of part ID pairs for easy comparison
+                existing_pairs = set()
+                existing_edges = current_graph["edges"]
+                for edge in existing_edges:
+                    part_ids = [str(pid) for pid in edge.get("part_ids", [])]
+                    if part_ids:
+                        existing_pairs.add(tuple(sorted(part_ids)))
+                
+                # Add new edges
+                new_edges_added = False
+                for edge in edges:
+                    # Ensure part_ids are strings
+                    part_ids = [str(pid) for pid in edge.get("part_ids", [])]
+                    part_ids = sorted(part_ids)
+                    
+                    # Check if edge already exists
+                    if tuple(part_ids) not in existing_pairs:
+                        current_graph["edges"].append({
+                            "part_ids": part_ids,
+                            "reason": edge.get("reason", "")
+                        })
+                        existing_pairs.add(tuple(part_ids))
+                        new_edges_added = True
+                
+                # Update the system's compatibility graph if we added new edges
+                if new_edges_added:
+                    supabase.table("systems").update({"compatibility_graph": current_graph}).eq("id", system_id).execute()
+                    print(f"Updated compatibility graph for system {system_id}")
+                else:
+                    print("No new edges to add to compatibility graph")
+            else:
+                # Create new compatibility graph
+                compatibility_graph = {
+                    "edges": edges
+                }
+                supabase.table("systems").update({"compatibility_graph": compatibility_graph}).eq("id", system_id).execute()
+                print(f"Created new compatibility graph for system {system_id}")
+        else:
+            print("Warning: Could not determine which system to update compatibility graph for")
+            
     except Exception as e:
         print(f"Error in update_system_compatibility_graph: {str(e)}")
+        import traceback
+        traceback.print_exc()
         # Don't raise an exception here, just log the error
         # This allows the API to continue returning results even if 
         # the compatibility graph can't be updated
@@ -458,6 +511,12 @@ async def compatibility_check(request: CompatibilityRequest):
         systems = await get_systems_for_subsystems(subsystem_ids)
         print(f"Found {len(systems)} systems")
         
+        # Track system_id if found
+        system_id = None
+        if systems and len(systems) > 0:
+            system_id = systems[0]["id"]
+            print(f"Using system ID: {system_id} for compatibility graph")
+        
         # Check compatibility with LLM
         llm_response = await check_compatibility_with_llm(parts_info, subsystems, systems)
         print(f"Received LLM response with {len(llm_response)} items")
@@ -468,7 +527,8 @@ async def compatibility_check(request: CompatibilityRequest):
         
         # Update compatibility graph
         try:
-            await update_system_compatibility_graph(edges)
+            # Pass the system_id if we found one
+            await update_system_compatibility_graph(edges, system_id)
             print("Updated compatibility graph")
         except Exception as e:
             # If updating the graph fails, just log it but continue
