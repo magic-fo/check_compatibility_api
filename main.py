@@ -504,10 +504,20 @@ async def debug_endpoint(request: CompatibilityRequest):
         systems = await get_systems_for_subsystems(subsystem_ids)
         print(f"Debug: Found {len(systems)} systems")
         
+        # 환경 변수 정보 추가
+        env_info = {
+            "SUPABASE_URL_SET": bool(supabase_url),
+            "SUPABASE_KEY_SET": bool(supabase_key),
+            "GOOGLE_API_KEY_SET": bool(GOOGLE_API_KEY),
+            "GOOGLE_MODEL_NAME": GOOGLE_MODEL_NAME,
+            "Current ENV": os.environ.get("ENVIRONMENT", "unknown")
+        }
+        
         return {
             "parts": parts,
             "subsystems": subsystems,
-            "systems": systems
+            "systems": systems,
+            "env_info": env_info
         }
         
     except Exception as e:
