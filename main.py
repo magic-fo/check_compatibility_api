@@ -385,34 +385,43 @@ async def update_system_compatibility_graph(edges: List[Dict[str, Any]]) -> None
         edges: List of compatibility graph edges to update
     """
     try:
-        # Get existing compatibility graph
-        response = supabase.table("compatibility_graph").select("*").execute()
-        existing_edges = response.data if response.data else []
-        
-        # Convert existing edges to set of part ID pairs for easy comparison
-        existing_pairs = set()
-        for edge in existing_edges:
-            # part_ids를 문자열로 변환하여 저장
-            part_ids = [str(pid) for pid in edge["part_ids"]]
-            existing_pairs.add(tuple(sorted(part_ids)))
-        
-        # Add new edges
-        for edge in edges:
-            # edge의 part_ids를 문자열로 변환
-            part_ids = [str(pid) for pid in edge["part_ids"]]
-            part_ids = sorted(part_ids)
+        # First check if the compatibility_graph table exists
+        try:
+            # Get existing compatibility graph
+            response = supabase.table("compatibility_graph").select("*").execute()
+            existing_edges = response.data if response.data else []
             
-            # Check if edge already exists
-            if tuple(part_ids) not in existing_pairs:
-                # Insert new edge
-                supabase.table("compatibility_graph").insert({
-                    "part_ids": part_ids,
-                    "reason": edge["reason"]
-                }).execute()
+            # Convert existing edges to set of part ID pairs for easy comparison
+            existing_pairs = set()
+            for edge in existing_edges:
+                # part_ids를 문자열로 변환하여 저장
+                part_ids = [str(pid) for pid in edge["part_ids"]]
+                existing_pairs.add(tuple(sorted(part_ids)))
+            
+            # Add new edges
+            for edge in edges:
+                # edge의 part_ids를 문자열로 변환
+                part_ids = [str(pid) for pid in edge["part_ids"]]
+                part_ids = sorted(part_ids)
+                
+                # Check if edge already exists
+                if tuple(part_ids) not in existing_pairs:
+                    # Insert new edge
+                    supabase.table("compatibility_graph").insert({
+                        "part_ids": part_ids,
+                        "reason": edge["reason"]
+                    }).execute()
+        except Exception as e:
+            # If the table doesn't exist or there's another error, just log it
+            # but don't stop the overall process
+            print(f"Warning: Could not update compatibility graph: {str(e)}")
+            print("The compatibility results will still be returned, but not stored in the database.")
                 
     except Exception as e:
-        print(f"Error updating compatibility graph: {str(e)}")
-        raise Exception(f"Error updating compatibility graph: {str(e)}")
+        print(f"Error in update_system_compatibility_graph: {str(e)}")
+        # Don't raise an exception here, just log the error
+        # This allows the API to continue returning results even if 
+        # the compatibility graph can't be updated
 
 @app.post("/api/compatibility-check")
 async def compatibility_check(request: CompatibilityRequest):
@@ -422,35 +431,56 @@ async def compatibility_check(request: CompatibilityRequest):
     try:
         print(f"Received compatibility check request: {json.dumps(request.dict())}")
         
+        # 입력받은 part_ids가 모두 문자열인지 확인하고 변환
+        request_part_ids = [str(pid) for pid in request.part_ids]
+        print(f"Request part_ids (as strings): {request_part_ids}")
+        
         # Get parts info
-        parts_info = await get_parts_info(request.part_ids)
-        print(f"Parts info: {json.dumps(parts_info)}")
+        parts_info = await get_parts_info(request_part_ids)
+        if not parts_info:
+            print("No parts found")
+            raise HTTPException(status_code=404, detail="No parts found with the given IDs")
+        print(f"Found {len(parts_info)} parts")
         
         # Get subsystems for parts
-        subsystems = await get_subsystems_for_parts(request.part_ids)
-        print(f"Subsystems: {json.dumps(subsystems)}")
+        subsystems = await get_subsystems_for_parts(request_part_ids)
+        print(f"Found {len(subsystems)} subsystems")
+        
+        # ID가 문자열인지 확인
+        subsystem_ids = [s["id"] for s in subsystems]
+        print(f"Subsystem IDs for systems query: {subsystem_ids}")
+        for i, sid in enumerate(subsystem_ids):
+            if not isinstance(sid, str):
+                print(f"Converting subsystem ID at index {i} from {type(sid)} to string")
+                subsystem_ids[i] = str(sid)
         
         # Get systems for subsystems
-        systems = await get_systems_for_subsystems([s["id"] for s in subsystems])
-        print(f"Systems: {json.dumps(systems)}")
+        systems = await get_systems_for_subsystems(subsystem_ids)
+        print(f"Found {len(systems)} systems")
         
         # Check compatibility with LLM
         llm_response = await check_compatibility_with_llm(parts_info, subsystems, systems)
-        print(f"LLM response: {json.dumps(llm_response)}")
+        print(f"Received LLM response with {len(llm_response)} items")
         
         # Extract compatibility edges
         edges = extract_compatibility_edges(llm_response)
-        print(f"Extracted edges: {json.dumps(edges)}")
+        print(f"Extracted {len(edges)} compatibility edges")
         
         # Update compatibility graph
-        await update_system_compatibility_graph(edges)
-        print("Updated compatibility graph")
+        try:
+            await update_system_compatibility_graph(edges)
+            print("Updated compatibility graph")
+        except Exception as e:
+            # If updating the graph fails, just log it but continue
+            print(f"Warning: Failed to update compatibility graph: {str(e)}")
+            print("Continuing to return compatibility results...")
         
         return {
             "parts": parts_info,
             "subsystems": subsystems,
             "systems": systems,
-            "compatibility_edges": edges
+            "compatibility_edges": edges,
+            "compatibility_results": llm_response  # Also include the direct LLM response
         }
         
     except Exception as e:
