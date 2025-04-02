@@ -21,6 +21,13 @@ model = genai.GenerativeModel(GOOGLE_MODEL_NAME)
 
 app = FastAPI()
 
+# 시작 로그 추가
+print("Starting FastAPI application...")
+print(f"GOOGLE_MODEL_NAME: {GOOGLE_MODEL_NAME}")
+print(f"GOOGLE_API_KEY set: {bool(GOOGLE_API_KEY)}")
+print(f"SUPABASE_URL set: {bool(supabase_url)}")
+print(f"SUPABASE_KEY set: {bool(supabase_key)}")
+
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
@@ -518,6 +525,7 @@ async def env_check():
     Debug endpoint to check environment variables
     """
     try:
+        print("Environment check endpoint called")
         # 모든 환경 변수 출력하지 않도록 필요한 것만 반환
         return {
             "SUPABASE_URL_SET": bool(supabase_url),
@@ -534,6 +542,22 @@ async def env_check():
             status_code=500,
             detail=f"Error in env-check endpoint: {str(e)}"
         )
+
+# 루트 경로 추가
+@app.get("/")
+async def root():
+    """
+    Root endpoint for health check
+    """
+    return {"status": "ok", "message": "API is running"}
+
+# API 테스트 경로 추가
+@app.get("/api/test")
+async def api_test():
+    """
+    Simple API test endpoint
+    """
+    return {"status": "ok", "message": "API is working"}
 
 if __name__ == "__main__":
     import uvicorn
