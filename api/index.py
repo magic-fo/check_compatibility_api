@@ -3,19 +3,23 @@ import os
 from pathlib import Path
 
 # Add the parent directory to sys.path to import from main.py
-sys.path.append(str(Path(__file__).parent.parent))
+parent_dir = str(Path(__file__).parent.parent)
+sys.path.append(parent_dir)
 
-# Print environment information
-print("Vercel API directory loaded")
-print(f"Python version: {sys.version}")
-print(f"Current working directory: {os.getcwd()}")
-print(f"Environment variables:")
-print(f"  GOOGLE_MODEL_NAME: {os.environ.get('GOOGLE_MODEL_NAME', 'not set')}")
-print(f"  GOOGLE_API_KEY set: {bool(os.environ.get('GOOGLE_API_KEY'))}")
-print(f"  SUPABASE_URL set: {bool(os.environ.get('SUPABASE_URL'))}")
-print(f"  SUPABASE_KEY set: {bool(os.environ.get('SUPABASE_KEY'))}")
+print(f"Python path: {sys.path}")
+print(f"Parent directory: {parent_dir}")
+print(f"Current directory: {os.getcwd()}")
+print(f"Files in current directory: {os.listdir('.')}")
+print(f"Files in parent directory: {os.listdir(parent_dir)}")
 
-# Import app from main.py
-from main import app
+try:
+    # Import app from main.py
+    from main import app
+    print("Successfully imported app from main.py")
+except Exception as e:
+    print(f"Error importing app from main.py: {str(e)}")
+    import traceback
+    traceback.print_exc()
 
 # This file serves as the entry point for Vercel serverless functions 
+# Export the FastAPI app for Vercel 
