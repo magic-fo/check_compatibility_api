@@ -15,8 +15,9 @@ supabase: Client = create_client(supabase_url, supabase_key)
 
 # Initialize Gemini
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+GOOGLE_MODEL_NAME = os.environ.get("GOOGLE_MODEL_NAME", "gemini-2.0-flash-thinking-exp")
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel(GOOGLE_MODEL_NAME)
 
 app = FastAPI()
 
@@ -57,6 +58,7 @@ async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
                 part["id"] = str(part["id"])
                 parts.append(part)
                 print(f"Found part: {json.dumps(part)}")
+            print(f"Parts after conversion: {json.dumps(parts)}")
             return parts
         else:
             print(f"No parts found with IDs: {part_ids}")
@@ -104,7 +106,7 @@ async def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
             print(f"Error getting subsystems for part ID {part_id}: {str(e)}")
             import traceback
             traceback.print_exc()
-                
+    print(f"Subsystems after conversion: {json.dumps(subsystems)}")
     return subsystems
 
 async def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]:
@@ -143,7 +145,7 @@ async def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str,
             print(f"Error getting systems for subsystem ID {subsystem_id}: {str(e)}")
             import traceback
             traceback.print_exc()
-                
+    print(f"Systems after conversion: {json.dumps(systems)}")
     return systems
 
 def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> str:
@@ -163,32 +165,36 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     for part in parts:
         part_info = {
             "id": str(part["id"]),  # ID를 문자열로 변환
-            "name": part["name"],
-            "category": part["category"],
-            "specifications": part["specifications"],
-            "description": part["description"]
+            "name": part.get("product_name", part.get("part_name", "")),  # product_name이나 part_name 사용
+            "category": part.get("category", ""),
+            "specifications": part.get("specifications", {}),
+            "description": part.get("part_description", "")
         }
         parts_info.append(part_info)
         
     # Format subsystems information
     subsystems_info = []
     for subsystem in subsystems:
+        # ID를 문자열로 변환하고 part_ids도 모두 문자열로 변환
         subsystem_info = {
-            "id": str(subsystem["id"]),  # ID를 문자열로 변환
-            "name": subsystem["name"],
-            "description": subsystem["description"],
-            "requirements": subsystem["requirements"]
+            "id": str(subsystem["id"]),
+            "name": subsystem.get("subsystem_name", ""),  # subsystem_name 사용
+            "description": subsystem.get("subsystem_description", ""),
+            "requirements": subsystem.get("requirements", {}),
+            "part_ids": [str(pid) for pid in subsystem.get("part_ids", [])]
         }
         subsystems_info.append(subsystem_info)
         
     # Format systems information
     systems_info = []
     for system in systems:
+        # ID를 문자열로 변환하고 subsystem_ids도 모두 문자열로 변환
         system_info = {
-            "id": str(system["id"]),  # ID를 문자열로 변환
-            "name": system["name"],
-            "description": system["description"],
-            "requirements": system["requirements"]
+            "id": str(system["id"]),
+            "name": system.get("system_name", ""),  # system_name 사용
+            "description": system.get("system_description", ""),
+            "requirements": system.get("requirements", {}),
+            "subsystem_ids": [str(sid) for sid in system.get("subsystem_ids", [])]
         }
         systems_info.append(system_info)
         
@@ -199,7 +205,11 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
         "systems": systems_info
     }
     
-    return json.dumps(input_data, indent=2)
+    # 디버깅 출력 추가
+    formatted_input = json.dumps(input_data, indent=2)
+    print(f"Formatted LLM input (IDs as strings): {formatted_input}")
+    
+    return formatted_input
 
 async def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
