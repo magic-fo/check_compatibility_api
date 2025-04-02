@@ -468,14 +468,34 @@ async def debug_endpoint(request: CompatibilityRequest):
     Debug endpoint to check part information and system hierarchy
     """
     try:
+        print(f"Received debug request: {json.dumps(request.dict())}")
+        
+        # 입력받은 part_ids가 모두 문자열인지 확인하고 변환
+        request_part_ids = [str(pid) for pid in request.part_ids]
+        print(f"Debug request part_ids (as strings): {request_part_ids}")
+        
         # Get parts info
-        parts = await get_parts_info(request.part_ids)
+        parts = await get_parts_info(request_part_ids)
+        if not parts:
+            print("No parts found")
+            raise HTTPException(status_code=404, detail="No parts found with the given IDs")
+        print(f"Debug: Found {len(parts)} parts")
         
         # Get subsystems for parts
-        subsystems = await get_subsystems_for_parts(request.part_ids)
+        subsystems = await get_subsystems_for_parts(request_part_ids)
+        print(f"Debug: Found {len(subsystems)} subsystems")
+        
+        # ID가 문자열인지 확인
+        subsystem_ids = [s["id"] for s in subsystems]
+        print(f"Debug: Subsystem IDs for systems query: {subsystem_ids}")
+        for i, sid in enumerate(subsystem_ids):
+            if not isinstance(sid, str):
+                print(f"Debug: Converting subsystem ID at index {i} from {type(sid)} to string")
+                subsystem_ids[i] = str(sid)
         
         # Get systems for subsystems
-        systems = await get_systems_for_subsystems([s["id"] for s in subsystems])
+        systems = await get_systems_for_subsystems(subsystem_ids)
+        print(f"Debug: Found {len(systems)} systems")
         
         return {
             "parts": parts,
@@ -484,9 +504,35 @@ async def debug_endpoint(request: CompatibilityRequest):
         }
         
     except Exception as e:
+        print(f"Error in debug endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Error in debug endpoint: {str(e)}"
+        )
+
+@app.get("/api/env-check")
+async def env_check():
+    """
+    Debug endpoint to check environment variables
+    """
+    try:
+        # 모든 환경 변수 출력하지 않도록 필요한 것만 반환
+        return {
+            "SUPABASE_URL_SET": bool(supabase_url),
+            "SUPABASE_KEY_SET": bool(supabase_key),
+            "GOOGLE_API_KEY_SET": bool(GOOGLE_API_KEY),
+            "GOOGLE_MODEL_NAME": GOOGLE_MODEL_NAME,
+            "Current ENV": os.environ.get("ENVIRONMENT", "unknown")
+        }
+    except Exception as e:
+        print(f"Error in env-check endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error in env-check endpoint: {str(e)}"
         )
 
 if __name__ == "__main__":
