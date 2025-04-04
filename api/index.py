@@ -528,6 +528,27 @@ async def compatibility_check(request: CompatibilityRequest):
             detail=f"Error processing compatibility check: {str(e)}"
         )
 
+# 기본 루트 엔드포인트 추가
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "API is running"}
+
+# 환경 변수 확인 엔드포인트 추가
+@app.get("/env-check")
+async def env_check():
+    return {
+        "SUPABASE_URL_SET": bool(os.environ.get("SUPABASE_URL")),
+        "SUPABASE_KEY_SET": bool(os.environ.get("SUPABASE_KEY")),
+        "GEMINI_API_KEY_SET": bool(os.environ.get("GEMINI_API_KEY")),
+        "Current ENV": os.environ.get("ENVIRONMENT", "unknown")
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Vercel 서버리스 함수를 위한 핸들러
+from mangum import Mangum
+
+# FastAPI 애플리케이션을 Mangum 핸들러로 래핑
+handler = Mangum(app)
