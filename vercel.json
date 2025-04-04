@@ -4,12 +4,12 @@
     {
       "src": "api/index.py",
       "use": "@vercel/python",
-      "config": { "runtime": "python3.8" }
+      "config": { "runtime": "python3.12" }
     },
     {
       "src": "api/debug/test.py",
       "use": "@vercel/python",
-      "config": { "runtime": "python3.8" }
+      "config": { "runtime": "python3.12" }
     },
     {
       "src": "api/hello.js",
@@ -18,7 +18,7 @@
     {
       "src": "api/minimal.py",
       "use": "@vercel/python",
-      "config": { "runtime": "python3.8" }
+      "config": { "runtime": "python3.12" }
     }
   ],
   "routes": [
@@ -39,4 +39,4 @@
       "dest": "api/index.py"
     }
   ]
-} 
+}
