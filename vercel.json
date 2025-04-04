@@ -4,36 +4,13 @@
     {
       "src": "api/index.py",
       "use": "@vercel/python",
-      "config": { "runtime": "python3.12" }
-    },
-    {
-      "src": "api/debug/test.py",
-      "use": "@vercel/python",
-      "config": { "runtime": "python3.12" }
-    },
-    {
-      "src": "api/debug/min_test.py",
-      "use": "@vercel/python",
-      "config": { "runtime": "python3.12" }
-    },
-    {
-      "src": "api/debug/test.js",
-      "use": "@vercel/node"
+      "config": { 
+        "runtime": "python3.12",
+        "buildCommand": "python -B -m pip install -r requirements.txt"
+      }
     }
   ],
   "routes": [
-    {
-      "src": "/api/debug/test",
-      "dest": "api/debug/test.py"
-    },
-    {
-      "src": "/api/debug/min",
-      "dest": "api/debug/min_test.py"
-    },
-    {
-      "src": "/api/debug/js",
-      "dest": "api/debug/test.js"
-    },
     {
       "src": "/(.*)",
       "dest": "api/index.py"
