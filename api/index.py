@@ -5,8 +5,12 @@ from typing import List, Dict, Any, Optional, Union
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from mangum import Mangum
 
-# 디버그 정보 출력
+# Mangum을 상단으로 이동
+from mangum import Mangum
+
+# 필요한 최소 로깅만 유지
 print(f"Python version: {sys.version}")
 print(f"Starting API initialization")
 print(f"Environment variables available: {list(k for k in os.environ.keys() if k.startswith('SUPABASE') or k.startswith('GEMINI'))}")
@@ -55,6 +59,8 @@ except Exception as e:
 
 # FastAPI 앱 생성
 app = FastAPI()
+# Mangum 핸들러 바로 설정
+handler = Mangum(app)
 
 # 요청 모델
 class CompatibilityRequest(BaseModel):
@@ -574,60 +580,33 @@ async def compatibility_check(request: CompatibilityRequest):
             detail=f"Error processing compatibility check: {str(e)}"
         )
 
-# 기본 루트 엔드포인트 추가
+# 기본 루트 엔드포인트 - 비동기 제거
 @app.get("/")
-async def root():
+def root():
     """API 상태를 확인하는 엔드포인트"""
     try:
-        version_info = {
-            "python_version": sys.version,
-            "fastapi_version": getattr(FastAPI, "__version__", "unknown"),
-            "api_status": "ok"
-        }
         return {
             "status": "ok", 
-            "message": "API is running",
-            "version_info": version_info,
-            "supabase_available": supabase is not None,
-            "gemini_available": genai_client is not None
+            "message": "API is running"
         }
     except Exception as e:
-        print(f"[ERROR] Error in root endpoint: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-# 환경 변수 확인 엔드포인트 추가
+# 환경 변수 확인 엔드포인트 - 비동기 제거
 @app.get("/env-check")
-async def env_check():
+def env_check():
     """환경 변수 설정 상태를 확인하는 엔드포인트"""
     try:
-        # 가려진 상태로 환경 변수 값 길이만 표시
-        sensitive_vars = {}
-        for key in ["SUPABASE_URL", "SUPABASE_KEY", "GEMINI_API_KEY"]:
-            value = os.environ.get(key)
-            if value:
-                # 값의 일부만 표시 (마스킹)
-                masked_value = f"{value[:3]}...{value[-3:]}" if len(value) > 6 else "***"
-                sensitive_vars[key] = {"available": True, "length": len(value), "sample": masked_value}
-            else:
-                sensitive_vars[key] = {"available": False}
-                
+        # 간소화된 응답
         return {
-            "env_vars": sensitive_vars,
-            "supabase_client_initialized": supabase is not None,
-            "gemini_client_initialized": genai_client is not None,
-            "current_env": os.environ.get("ENVIRONMENT", "unknown"),
+            "supabase_url_set": bool(os.environ.get("SUPABASE_URL")),
+            "supabase_key_set": bool(os.environ.get("SUPABASE_KEY")),
+            "gemini_api_key_set": bool(os.environ.get("GEMINI_API_KEY")),
             "vercel_env": os.environ.get("VERCEL_ENV", "not_vercel")
         }
     except Exception as e:
-        print(f"[ERROR] Error in env-check endpoint: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-# Vercel 서버리스 함수를 위한 핸들러
-from mangum import Mangum
-
-# FastAPI 애플리케이션을 Mangum 핸들러로 래핑
-handler = Mangum(app)

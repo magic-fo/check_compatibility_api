@@ -4,10 +4,19 @@
     {
       "src": "api/index.py",
       "use": "@vercel/python",
-      "config": { "runtime": "python3.9" }
+      "config": { "runtime": "python3.8" }
+    },
+    {
+      "src": "api/debug/test.py",
+      "use": "@vercel/python",
+      "config": { "runtime": "python3.8" }
     }
   ],
   "routes": [
+    {
+      "src": "/debug/test",
+      "dest": "api/debug/test.py"
+    },
     {
       "src": "/(.*)",
       "dest": "api/index.py"
