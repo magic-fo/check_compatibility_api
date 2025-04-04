@@ -12,27 +12,27 @@
       "config": { "runtime": "python3.12" }
     },
     {
-      "src": "api/hello.js",
-      "use": "@vercel/node"
-    },
-    {
-      "src": "api/minimal.py",
+      "src": "api/debug/min_test.py",
       "use": "@vercel/python",
       "config": { "runtime": "python3.12" }
+    },
+    {
+      "src": "api/debug/test.js",
+      "use": "@vercel/node"
     }
   ],
   "routes": [
     {
-      "src": "/minimal",
-      "dest": "api/minimal.py"
-    },
-    {
-      "src": "/hello",
-      "dest": "api/hello.js"
-    },
-    {
-      "src": "/debug/test",
+      "src": "/api/debug/test",
       "dest": "api/debug/test.py"
+    },
+    {
+      "src": "/api/debug/min",
+      "dest": "api/debug/min_test.py"
+    },
+    {
+      "src": "/api/debug/js",
+      "dest": "api/debug/test.js"
     },
     {
       "src": "/(.*)",
