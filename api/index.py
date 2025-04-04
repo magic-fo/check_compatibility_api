@@ -1,12 +1,15 @@
 import json
 import os
+import sys
 from typing import List, Dict, Any, Optional, Union
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from supabase import create_client, Client
-from google import genai
-from google.genai.types import Content, Part
+
+# 디버그 정보 출력
+print(f"Python version: {sys.version}")
+print(f"Starting API initialization")
+print(f"Environment variables available: {list(k for k in os.environ.keys() if k.startswith('SUPABASE') or k.startswith('GEMINI'))}")
 
 # 환경 변수 로드
 load_dotenv()
@@ -14,14 +17,41 @@ load_dotenv()
 # Supabase 설정
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_KEY")
-supabase: Client = create_client(supabase_url, supabase_key)
+
+print(f"Supabase URL available: {bool(supabase_url)}")
+print(f"Supabase Key available: {bool(supabase_key)}")
+
+try:
+    from supabase import create_client, Client
+    if supabase_url and supabase_key:
+        supabase: Client = create_client(supabase_url, supabase_key)
+        print("Supabase client initialized successfully")
+    else:
+        supabase = None
+        print("[WARNING] Supabase credentials not found, some features will be limited")
+except Exception as e:
+    print(f"[ERROR] Failed to initialize Supabase client: {str(e)}")
+    supabase = None
 
 # Gemini API 키
 gemini_api_key = os.environ.get("GEMINI_API_KEY")
+print(f"Gemini API Key available: {bool(gemini_api_key)}")
 
 # Gemini 클라이언트 설정
-genai.configure(api_key=gemini_api_key)
-genai_client = genai.Client(api_key=gemini_api_key, http_options={'api_version':'v1alpha'})
+try:
+    from google import genai
+    from google.genai.types import Content, Part
+    
+    if gemini_api_key:
+        genai.configure(api_key=gemini_api_key)
+        genai_client = genai.Client(api_key=gemini_api_key, http_options={'api_version':'v1alpha'})
+        print("Gemini client initialized successfully")
+    else:
+        genai_client = None
+        print("[WARNING] Gemini API key not found, LLM features will be unavailable")
+except Exception as e:
+    print(f"[ERROR] Failed to initialize Gemini client: {str(e)}")
+    genai_client = None
 
 # FastAPI 앱 생성
 app = FastAPI()
@@ -458,6 +488,22 @@ async def compatibility_check(request: CompatibilityRequest):
     try:
         print(f"[START] Compatibility check for part_ids: {request.part_ids}")
         
+        # Supabase 클라이언트가 초기화되지 않은 경우
+        if supabase is None:
+            print("[ERROR] Supabase client not initialized")
+            return {
+                "status": "error",
+                "message": "Supabase connection not available. Please check environment variables."
+            }
+            
+        # Gemini 클라이언트가 초기화되지 않은 경우
+        if genai_client is None:
+            print("[ERROR] Gemini client not initialized")
+            return {
+                "status": "error",
+                "message": "Gemini API connection not available. Please check environment variables."
+            }
+        
         # 입력받은 part_ids가 모두 문자열인지 확인하고 변환
         request_part_ids = [str(pid) for pid in request.part_ids]
         
@@ -531,17 +577,50 @@ async def compatibility_check(request: CompatibilityRequest):
 # 기본 루트 엔드포인트 추가
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "API is running"}
+    """API 상태를 확인하는 엔드포인트"""
+    try:
+        version_info = {
+            "python_version": sys.version,
+            "fastapi_version": getattr(FastAPI, "__version__", "unknown"),
+            "api_status": "ok"
+        }
+        return {
+            "status": "ok", 
+            "message": "API is running",
+            "version_info": version_info,
+            "supabase_available": supabase is not None,
+            "gemini_available": genai_client is not None
+        }
+    except Exception as e:
+        print(f"[ERROR] Error in root endpoint: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 # 환경 변수 확인 엔드포인트 추가
 @app.get("/env-check")
 async def env_check():
-    return {
-        "SUPABASE_URL_SET": bool(os.environ.get("SUPABASE_URL")),
-        "SUPABASE_KEY_SET": bool(os.environ.get("SUPABASE_KEY")),
-        "GEMINI_API_KEY_SET": bool(os.environ.get("GEMINI_API_KEY")),
-        "Current ENV": os.environ.get("ENVIRONMENT", "unknown")
-    }
+    """환경 변수 설정 상태를 확인하는 엔드포인트"""
+    try:
+        # 가려진 상태로 환경 변수 값 길이만 표시
+        sensitive_vars = {}
+        for key in ["SUPABASE_URL", "SUPABASE_KEY", "GEMINI_API_KEY"]:
+            value = os.environ.get(key)
+            if value:
+                # 값의 일부만 표시 (마스킹)
+                masked_value = f"{value[:3]}...{value[-3:]}" if len(value) > 6 else "***"
+                sensitive_vars[key] = {"available": True, "length": len(value), "sample": masked_value}
+            else:
+                sensitive_vars[key] = {"available": False}
+                
+        return {
+            "env_vars": sensitive_vars,
+            "supabase_client_initialized": supabase is not None,
+            "gemini_client_initialized": genai_client is not None,
+            "current_env": os.environ.get("ENVIRONMENT", "unknown"),
+            "vercel_env": os.environ.get("VERCEL_ENV", "not_vercel")
+        }
+    except Exception as e:
+        print(f"[ERROR] Error in env-check endpoint: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
