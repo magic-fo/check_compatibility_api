@@ -2,21 +2,18 @@ import json
 import os
 import sys
 from typing import List, Dict, Any, Optional, Union
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from mangum import Mangum
-
-# Mangum을 상단으로 이동
-from mangum import Mangum
 
 # 필요한 최소 로깅만 유지
 print(f"Python version: {sys.version}")
 print(f"Starting API initialization")
-print(f"Environment variables available: {list(k for k in os.environ.keys() if k.startswith('SUPABASE') or k.startswith('GEMINI'))}")
 
 # 환경 변수 로드
 load_dotenv()
+
+# Flask 앱 생성 - 가장 먼저 초기화
+app = Flask(__name__)
 
 # Supabase 설정
 supabase_url = os.environ.get("SUPABASE_URL")
@@ -38,35 +35,25 @@ except Exception as e:
     supabase = None
 
 # Gemini API 키
-gemini_api_key = os.environ.get("GEMINI_API_KEY")
+gemini_api_key = os.environ.get("GOOGLE_API_KEY")
+gemini_model_name = os.environ.get("GOOGLE_MODEL_NAME", "gemini-1.5-flash-thinking")
 print(f"Gemini API Key available: {bool(gemini_api_key)}")
+print(f"Using model: {gemini_model_name}")
 
 # Gemini 클라이언트 설정
+genai = None
 try:
-    from google import genai
-    from google.genai.types import Content, Part
-    
     if gemini_api_key:
+        import google.generativeai as genai
         genai.configure(api_key=gemini_api_key)
-        genai_client = genai.Client(api_key=gemini_api_key, http_options={'api_version':'v1alpha'})
         print("Gemini client initialized successfully")
     else:
-        genai_client = None
         print("[WARNING] Gemini API key not found, LLM features will be unavailable")
 except Exception as e:
     print(f"[ERROR] Failed to initialize Gemini client: {str(e)}")
-    genai_client = None
+    genai = None
 
-# FastAPI 앱 생성
-app = FastAPI()
-# Mangum 핸들러 바로 설정
-handler = Mangum(app)
-
-# 요청 모델
-class CompatibilityRequest(BaseModel):
-    part_ids: List[Union[str, int]]
-
-async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
+def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get part information from Supabase
     
@@ -76,6 +63,10 @@ async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
     Returns:
         List of parts with information
     """
+    if not supabase:
+        print("[ERROR] Supabase client not initialized")
+        return []
+        
     try:
         parts = []
         
@@ -97,7 +88,7 @@ async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
         print(f"[ERROR] Error getting parts info: {str(e)}")
         return []
 
-async def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
+def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get subsystems containing the specified parts
     
@@ -132,7 +123,7 @@ async def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
         print(f"[ERROR] Error getting subsystems: {str(e)}")
         return []
 
-async def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]:
+def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Get systems containing the specified subsystems
     
@@ -184,10 +175,12 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     for part in parts:
         part_info = {
             "id": str(part["id"]),
-            "part_name": part.get("part_name", ""),
+            "name": part.get("part_name", ""),
             "product_name": part.get("product_name", ""),
-            "part_description": part.get("part_description", ""),
-            "specifications": part.get("specifications", {})
+            "specifications": part.get("specifications", {}),
+            "description": part.get("part_description", ""),
+            "dimensions": part.get("dimensions", {}),
+            "weight": part.get("weight", {})
         }
         parts_info.append(part_info)
     
@@ -196,9 +189,9 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     for subsystem in subsystems:
         subsystem_info = {
             "id": str(subsystem["id"]),
-            "subsystem_name": subsystem.get("subsystem_name", ""),
-            "subsystem_description": subsystem.get("subsystem_description", ""),
-            "technical_engineering_specifications": subsystem.get("technical_engineering_specifications", [])
+            "name": subsystem.get("subsystem_name", ""),
+            "description": subsystem.get("subsystem_description", ""),
+            "part_ids": [str(p_id) for p_id in subsystem.get("part_ids", [])]
         }
         subsystems_info.append(subsystem_info)
     
@@ -207,9 +200,8 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     for system in systems:
         system_info = {
             "id": str(system["id"]),
-            "system_name": system.get("system_name", ""),
-            "system_description": system.get("system_description", ""),
-            "system_specifications": system.get("system_specifications", {})
+            "description": system.get("system_description", ""),
+            "subsystem_ids": [str(s_id) for s_id in system.get("subsystem_ids", [])]
         }
         systems_info.append(system_info)
     
@@ -222,9 +214,9 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     
     return formatted_input
 
-async def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Check compatibility between parts using Gemini 2.0 Flash Thinking
+    Check compatibility between parts using Gemini model
     
     Args:
         parts_info: List of parts to check compatibility for
@@ -234,6 +226,10 @@ async def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsyst
     Returns:
         LLM response with compatibility results
     """
+    if not genai:
+        print("[ERROR] Gemini client not initialized")
+        return []
+        
     try:
         # Format input data for LLM
         input_data = format_llm_input(parts_info, subsystems, systems)
@@ -311,58 +307,50 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
         - *Durability Testing*: Verify compatibility issues such as wear and fatigue during long-term use.
         - *Boundary Condition Testing*: Verify performance under extreme conditions including maximum/minimum loads, temperatures, speeds, etc."""
         
-        # 쿼리 구성
+        # 간소화된 쿼리 생성
         query = f"""Check the compatibility between the parts provided.
 {input_data}"""
-
-        # 구조화된 입력 생성
-        contents = Content(
-            role="user",
-            parts=[Part.from_text(text=query)]
+        
+        # Gemini API 호출
+        generation_config = {
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "top_k": 0,
+            "max_output_tokens": 8192,
+        }
+        
+        # 모델 설정 - 환경변수에서 가져온 모델 이름 사용
+        model = genai.GenerativeModel(
+            model_name=gemini_model_name,
+            generation_config=generation_config,
         )
         
-        # 새로운 SDK를 사용하여 Gemini 모델 호출
-        response = genai_client.models.generate_content(
-            model='gemini-2.0-flash-thinking-exp',
-            contents=contents,
-            system_instructions=system_instruction,
-            generation_config={
-                "temperature": 0.7,
-                "top_p": 0.95,
-                "max_output_tokens": 8192,
-            }
-        )
+        # 시스템 인스트럭션 및 콘텐츠 설정
+        chat = model.start_chat(system_instruction=system_instruction)
+        response = chat.send_message(query)
         
+        # 응답 파싱
         try:
-            # 응답에서 JSON 추출
-            if response.candidates and len(response.candidates) > 0:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'content') and candidate.content.parts:
-                    text_response = candidate.content.parts[0].text
-                    results = json.loads(text_response)
-                    return results
-                else:
-                    print("[ERROR] Candidate content structure unexpected")
-                    return []
-            elif hasattr(response, 'text'):
-                # 대체 방법으로 text 속성 사용
-                text_response = response.text
-                results = json.loads(text_response)
-                return results
+            # 텍스트에서 JSON 부분 추출
+            result_text = response.text
+            if "```json" in result_text and "```" in result_text:
+                json_text = result_text.split("```json")[1].split("```")[0].strip()
             else:
-                print("[ERROR] Unexpected response format from Gemini API")
-                return []
-        except (json.JSONDecodeError, AttributeError) as e:
-            print(f"[ERROR] Failed to parse LLM response as JSON: {str(e)}")
-            return []
+                json_text = result_text
                 
+            # JSON 파싱
+            compatibility_result = json.loads(json_text)
+            return compatibility_result
+        except Exception as e:
+            print(f"[ERROR] Failed to parse Gemini response: {str(e)}")
+            print(f"Raw response: {response.text}")
+            return []
+    
     except Exception as e:
-        print(f"[ERROR] Error in LLM compatibility check: {str(e)}")
+        print(f"[ERROR] Error checking compatibility with LLM: {str(e)}")
         return []
 
-def extract_compatibility_edges(
-    llm_response: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+def extract_compatibility_edges(llm_response: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Extract compatibility graph edges from LLM response
     
@@ -424,7 +412,7 @@ def extract_compatibility_edges(
     print(f"[INFO] Completed extraction of compatibility edges: {len(edges)} found")
     return edges
 
-async def update_system_compatibility_graph(edges: List[Dict[str, Any]], system_id: Optional[str] = None) -> None:
+def update_system_compatibility_graph(edges: List[Dict[str, Any]], system_id: Optional[str] = None) -> None:
     """
     Update compatibility graph in Supabase systems table
     
@@ -483,130 +471,152 @@ async def update_system_compatibility_graph(edges: List[Dict[str, Any]], system_
     except Exception as e:
         print(f"[ERROR] Failed to update compatibility graph: {str(e)}")
         # Don't raise an exception here, just log the error
-        # This allows the API to continue returning results even if 
-        # the compatibility graph can't be updated
 
-@app.post("/api/compatibility-check")
-async def compatibility_check(request: CompatibilityRequest):
+@app.route('/api/compatibility-check', methods=['POST'])
+def compatibility_check():
     """
-    Check compatibility between parts and update compatibility graph in the database
+    Check compatibility between parts
     """
+    if not supabase:
+        return jsonify({"error": "Database connection not available"}), 500
+        
+    if not genai:
+        return jsonify({"error": "LLM service not available"}), 500
+    
     try:
-        print(f"[START] Compatibility check for part_ids: {request.part_ids}")
-        
-        # Supabase 클라이언트가 초기화되지 않은 경우
-        if supabase is None:
-            print("[ERROR] Supabase client not initialized")
-            return {
-                "status": "error",
-                "message": "Supabase connection not available. Please check environment variables."
-            }
+        # 요청 데이터 가져오기
+        data = request.get_json()
+        if not data or "part_ids" not in data:
+            return jsonify({"error": "Invalid request. 'part_ids' field is required"}), 400
             
-        # Gemini 클라이언트가 초기화되지 않은 경우
-        if genai_client is None:
-            print("[ERROR] Gemini client not initialized")
-            return {
-                "status": "error",
-                "message": "Gemini API connection not available. Please check environment variables."
-            }
+        # 문자열로 변환
+        part_ids = [str(id) for id in data["part_ids"]]
         
-        # 입력받은 part_ids가 모두 문자열인지 확인하고 변환
-        request_part_ids = [str(pid) for pid in request.part_ids]
+        if len(part_ids) < 2:
+            return jsonify({"error": "At least 2 parts are required for compatibility check"}), 400
         
-        # Get parts info
-        parts_info = await get_parts_info(request_part_ids)
-        if not parts_info:
-            print("[ERROR] No parts found with the given IDs")
-            raise HTTPException(status_code=404, detail="No parts found with the given IDs")
-        print(f"[INFO] Found {len(parts_info)} parts")
+        # 부품 정보 조회
+        parts = get_parts_info(part_ids)
         
-        # Get subsystems for parts
-        subsystems = await get_subsystems_for_parts(request_part_ids)
-        print(f"[INFO] Found {len(subsystems)} subsystems")
+        if not parts:
+            return jsonify({"error": "No parts found with the provided IDs"}), 404
         
-        # ID가 문자열인지 확인
-        subsystem_ids = [s["id"] for s in subsystems]
-        for i, sid in enumerate(subsystem_ids):
-            if not isinstance(sid, str):
-                subsystem_ids[i] = str(sid)
+        # 서브시스템 정보 조회
+        subsystems = get_subsystems_for_parts(part_ids)
         
-        # Get systems for subsystems
-        systems = await get_systems_for_subsystems(subsystem_ids)
-        print(f"[INFO] Found {len(systems)} systems")
-        
-        # Track system_id if found
-        system_id = None
-        if systems and len(systems) > 0:
-            system_id = systems[0]["id"]
-            print(f"[INFO] Using system ID: {system_id} for compatibility graph")
+        # 시스템 정보 조회
+        system_ids = []
+        if subsystems:
+            subsystem_ids = [str(subsystem["id"]) for subsystem in subsystems]
+            systems = get_systems_for_subsystems(subsystem_ids)
+            if systems:
+                system_ids = [str(system["id"]) for system in systems]
         else:
-            print("[WARNING] No system found for these parts. Compatibility graph will not be updated.")
-            return {
-                "status": "warning",
-                "message": "No system found for these parts. Compatibility check completed but graph not updated."
-            }
+            systems = []
         
-        # Check compatibility with LLM
-        try:
-            llm_response = await check_compatibility_with_llm(parts_info, subsystems, systems)
-            print(f"[INFO] LLM compatibility check completed successfully")
-            
-            # Extract compatibility edges
-            edges = extract_compatibility_edges(llm_response)
-            print(f"[INFO] Extracted {len(edges)} compatibility edges")
-            
-            # Update compatibility graph
-            await update_system_compatibility_graph(edges, system_id)
-            print(f"[SUCCESS] Compatibility graph updated for system {system_id}")
-            
-            return {
-                "status": "success",
-                "message": "Compatibility graph updated successfully",
-                "system_id": system_id
-            }
-            
-        except Exception as e:
-            print(f"[ERROR] Error in compatibility process: {str(e)}")
-            return {
-                "status": "error",
-                "message": f"Error processing compatibility check: {str(e)}",
-                "system_id": system_id
-            }
+        # LLM으로 호환성 체크
+        compatibility_results = check_compatibility_with_llm(parts, subsystems, systems)
+        
+        if not compatibility_results:
+            return jsonify({"error": "Failed to check compatibility"}), 500
+        
+        # 엣지 추출
+        edges = extract_compatibility_edges(compatibility_results)
+        
+        # 결과를 데이터베이스에 저장
+        if systems and len(systems) > 0:
+            # 호환성 그래프를 첫 번째 시스템에 연결
+            system_id = systems[0]["id"]
+            update_system_compatibility_graph(edges, system_id)
+        
+        return jsonify({
+            "compatibility_results": compatibility_results,
+            "part_ids": part_ids,
+            "systems": [system["id"] for system in systems] if systems else []
+        })
         
     except Exception as e:
         print(f"[ERROR] Error in compatibility check: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing compatibility check: {str(e)}"
-        )
+        return jsonify({"error": f"Error checking compatibility: {str(e)}"}), 500
 
-# 기본 루트 엔드포인트 - 비동기 제거
-@app.get("/")
+@app.route('/')
 def root():
-    """API 상태를 확인하는 엔드포인트"""
+    """루트 엔드포인트"""
+    available_modules = []
     try:
-        return {
-            "status": "ok", 
-            "message": "API is running"
+        import sys
+        available_modules.append("sys")
+    except ImportError:
+        pass
+    
+    try:
+        import google
+        available_modules.append("google")
+        
+        # Google 모듈 세부 정보 확인
+        google_modules = dir(google)
+    except ImportError:
+        google_modules = "not available"
+    
+    # 환경 정보 수집
+    status = {
+        "status": "online",
+        "version": "1.0.0",
+        "endpoints": {
+            "/api/compatibility-check": "POST - Check compatibility between parts",
+            "/env-check": "GET - Check environment variables"
+        },
+        "environments": {
+            "supabase": "available" if supabase else "unavailable",
+            "gemini": "available" if genai else "unavailable"
+        },
+        "debug": {
+            "python_version": sys.version,
+            "available_modules": available_modules,
+            "google_modules": google_modules if "google" in available_modules else None,
+            "env_vars": {k: bool(v) for k, v in os.environ.items() if not k.startswith("AWS_")},
         }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    }
+    return jsonify(status)
 
-# 환경 변수 확인 엔드포인트 - 비동기 제거
-@app.get("/env-check")
+@app.route('/env-check')
 def env_check():
-    """환경 변수 설정 상태를 확인하는 엔드포인트"""
-    try:
-        # 간소화된 응답
-        return {
-            "supabase_url_set": bool(os.environ.get("SUPABASE_URL")),
-            "supabase_key_set": bool(os.environ.get("SUPABASE_KEY")),
-            "gemini_api_key_set": bool(os.environ.get("GEMINI_API_KEY")),
-            "vercel_env": os.environ.get("VERCEL_ENV", "not_vercel")
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    """환경 변수 확인 엔드포인트"""
+    env_vars = {
+        "SUPABASE_URL": bool(os.environ.get("SUPABASE_URL")),
+        "SUPABASE_KEY": bool(os.environ.get("SUPABASE_KEY")),
+        "GOOGLE_API_KEY": bool(os.environ.get("GOOGLE_API_KEY")),
+        "PYTHON_VERSION": sys.version
+    }
+    return jsonify(env_vars)
+
+# Vercel 서버리스 함수 핸들러
+def handler(event, context):
+    """Vercel 서버리스 함수 핸들러"""
+    path = event.get('path', '/')
+    http_method = event.get('httpMethod', 'GET')
+    
+    # Flask 앱 컨텍스트 설정
+    with app.test_request_context(
+        path=path,
+        method=http_method,
+        headers=event.get('headers', {}),
+        query_string=event.get('queryStringParameters', {}),
+        data=event.get('body', '')
+    ):
+        # Flask에서 요청 처리
+        try:
+            response = app.full_dispatch_request()
+            return {
+                'statusCode': response.status_code,
+                'headers': dict(response.headers),
+                'body': response.get_data(as_text=True)
+            }
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'body': json.dumps({'error': str(e)})
+            }
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    app.run(debug=True, host="0.0.0.0", port=8000)
