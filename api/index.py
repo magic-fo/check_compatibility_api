@@ -22,4 +22,4 @@ except Exception as e:
     traceback.print_exc()
 
 # This file serves as the entry point for Vercel serverless functions 
-# Export the FastAPI app for Vercel 
+# Export the FastAPI app for Vercel
