@@ -2,7 +2,6 @@ import json
 import os
 import sys
 from typing import List, Dict, Any, Optional, Union
-import fastapi
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -16,10 +15,6 @@ load_dotenv()
 
 # FastAPI 앱 생성 - 가장 먼저 초기화
 app = FastAPI()
-
-# Mangum 핸들러 설정 - FastAPI 앱 생성 후에 즉시 초기화
-from mangum import Mangum
-handler = Mangum(app)
 
 # Supabase 설정
 supabase_url = os.environ.get("SUPABASE_URL")
@@ -559,6 +554,6 @@ def env_check():
     }
     return env_vars
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# Vercel 서버리스 환경을 위한 핸들러
+from mangum import Mangum
+handler = Mangum(app)
