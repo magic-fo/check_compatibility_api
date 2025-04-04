@@ -5,8 +5,7 @@
       "src": "api/index.py",
       "use": "@vercel/python",
       "config": { 
-        "runtime": "python3.12",
-        "buildCommand": "python -B -m pip install -r requirements.txt"
+        "runtime": "python3.9"
       }
     }
   ],
