@@ -10,9 +10,17 @@
       "src": "api/debug/test.py",
       "use": "@vercel/python",
       "config": { "runtime": "python3.8" }
+    },
+    {
+      "src": "api/hello.js",
+      "use": "@vercel/node"
     }
   ],
   "routes": [
+    {
+      "src": "/hello",
+      "dest": "api/hello.js"
+    },
     {
       "src": "/debug/test",
       "dest": "api/debug/test.py"
