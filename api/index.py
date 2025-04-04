@@ -1,15 +1,11 @@
 import json
 import os
 import sys
-import logging
 from typing import List, Dict, Any, Optional, Union
+import fastapi
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
-# 로깅 설정
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # 필요한 최소 로깅만 유지
 print(f"Python version: {sys.version}")
@@ -20,6 +16,10 @@ load_dotenv()
 
 # FastAPI 앱 생성 - 가장 먼저 초기화
 app = FastAPI()
+
+# Mangum 핸들러 설정 - FastAPI 앱 생성 후에 즉시 초기화
+from mangum import Mangum
+handler = Mangum(app)
 
 # Supabase 설정
 supabase_url = os.environ.get("SUPABASE_URL")
@@ -558,10 +558,6 @@ def env_check():
         "PYTHON_VERSION": sys.version
     }
     return env_vars
-
-# Mangum 핸들러 설정 - 앱 라우트 정의 후에 초기화
-from mangum import Mangum
-handler = Mangum(app)
 
 if __name__ == "__main__":
     import uvicorn
