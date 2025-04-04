@@ -1,63 +1,65 @@
 import json
 import os
 import sys
+import logging
 from typing import List, Dict, Any, Optional, Union
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from mangum import Mangum
 
-# 필요한 최소 로깅만 유지
-print(f"Python version: {sys.version}")
-print(f"Starting API initialization")
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 환경 변수 로드
 load_dotenv()
 
-# FastAPI 앱 생성 - 앱 정의를 먼저 해서 Mangum 핸들러가 앱 객체를 참조할 수 있게 함
-app = FastAPI()
+# 필요한 로깅
+logger.info(f"Python version: {sys.version}")
+logger.info("Starting API initialization")
 
-# 요청 모델
+# FastAPI 앱 생성 - 앱 정의를 먼저 해서 Mangum 핸들러가 앱 객체를 참조할 수 있게 함
+app = FastAPI(title="Compatibility API")
+
+# 요청 모델 정의
 class CompatibilityRequest(BaseModel):
     part_ids: List[Union[str, int]]
-
-# Mangum 핸들러 설정 - 앱 객체를 인자로 전달
-handler = Mangum(app)
 
 # Supabase 설정
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_KEY")
 
-print(f"Supabase URL available: {bool(supabase_url)}")
-print(f"Supabase Key available: {bool(supabase_key)}")
+logger.info(f"Supabase URL available: {bool(supabase_url)}")
+logger.info(f"Supabase Key available: {bool(supabase_key)}")
 
+# Supabase 클라이언트 초기화
+supabase = None
 try:
     from supabase import create_client, Client
     if supabase_url and supabase_key:
         supabase: Client = create_client(supabase_url, supabase_key)
-        print("Supabase client initialized successfully")
+        logger.info("Supabase client initialized successfully")
     else:
         supabase = None
-        print("[WARNING] Supabase credentials not found, some features will be limited")
+        logger.warning("Supabase credentials not found, some features will be limited")
 except Exception as e:
-    print(f"[ERROR] Failed to initialize Supabase client: {str(e)}")
+    logger.error(f"Failed to initialize Supabase client: {str(e)}")
     supabase = None
 
 # Gemini API 키
 gemini_api_key = os.environ.get("GEMINI_API_KEY")
-print(f"Gemini API Key available: {bool(gemini_api_key)}")
+logger.info(f"Gemini API Key available: {bool(gemini_api_key)}")
 
-# Gemini 클라이언트 설정 - 수정된 임포트 방식
-genai = None
+# Gemini 클라이언트 설정 - 수정된 임포트 방식 (먼저 import 해서 모듈이 로드되도록)
 try:
+    import google.generativeai as genai
     if gemini_api_key:
-        import google.generativeai as genai
         genai.configure(api_key=gemini_api_key)
-        print("Gemini client initialized successfully")
+        logger.info("Gemini client initialized successfully")
     else:
-        print("[WARNING] Gemini API key not found, LLM features will be unavailable")
+        logger.warning("Gemini API key not found, LLM features will be unavailable")
 except Exception as e:
-    print(f"[ERROR] Failed to initialize Gemini client: {str(e)}")
+    logger.error(f"Failed to initialize Gemini client: {str(e)}")
     genai = None
 
 async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
@@ -71,7 +73,7 @@ async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
         List of parts with information
     """
     if not supabase:
-        print("[ERROR] Supabase client not initialized")
+        logger.error("Supabase client not initialized")
         return []
         
     try:
@@ -86,13 +88,13 @@ async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
                 parts.append(part)
         
         if not parts:
-            print(f"[ERROR] No parts found with IDs: {part_ids}")
+            logger.error(f"No parts found with IDs: {part_ids}")
             return []
             
         return parts
         
     except Exception as e:
-        print(f"[ERROR] Error getting parts info: {str(e)}")
+        logger.error(f"Error getting parts info: {str(e)}")
         return []
 
 async def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
@@ -122,12 +124,12 @@ async def get_subsystems_for_parts(part_ids: List[str]) -> List[Dict[str, Any]]:
                         subsystem_ids.add(subsystem["id"])
                         subsystems.append(subsystem)
             except Exception as e:
-                print(f"[ERROR] Error getting subsystems for part ID {part_id}: {str(e)}")
+                logger.error(f"Error getting subsystems for part ID {part_id}: {str(e)}")
         
         return subsystems
         
     except Exception as e:
-        print(f"[ERROR] Error getting subsystems: {str(e)}")
+        logger.error(f"Error getting subsystems: {str(e)}")
         return []
 
 async def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]:
@@ -157,12 +159,12 @@ async def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str,
                         system_ids.add(system["id"])
                         systems.append(system)
             except Exception as e:
-                print(f"[ERROR] Error getting systems for subsystem ID {subsystem_id}: {str(e)}")
+                logger.error(f"Error getting systems for subsystem ID {subsystem_id}: {str(e)}")
         
         return systems
         
     except Exception as e:
-        print(f"[ERROR] Error getting systems: {str(e)}")
+        logger.error(f"Error getting systems: {str(e)}")
         return []
 
 def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> str:
@@ -232,8 +234,8 @@ async def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsyst
     Returns:
         LLM response with compatibility results
     """
-    if not genai:
-        print("[ERROR] Gemini client not initialized")
+    if genai is None:
+        logger.error("Gemini client not initialized")
         return []
         
     try:
@@ -310,12 +312,12 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
             compatibility_result = json.loads(json_text)
             return compatibility_result
         except Exception as e:
-            print(f"[ERROR] Failed to parse Gemini response: {str(e)}")
-            print(f"Raw response: {response.text}")
+            logger.error(f"Failed to parse Gemini response: {str(e)}")
+            logger.error(f"Raw response: {response.text}")
             return []
     
     except Exception as e:
-        print(f"[ERROR] Error checking compatibility with LLM: {str(e)}")
+        logger.error(f"Error checking compatibility with LLM: {str(e)}")
         return []
 
 def extract_compatibility_edges(
@@ -333,7 +335,7 @@ def extract_compatibility_edges(
     edges = []
     processed_pairs = set()  # Track processed part pairs to avoid duplicates
     
-    print(f"[INFO] Starting extraction of compatibility edges")
+    logger.info("Starting extraction of compatibility edges")
     
     for part_result in llm_response:
         part_id = part_result.get("part_id")
@@ -372,14 +374,14 @@ def extract_compatibility_edges(
                 }
                 
                 edges.append(edge)
-                print(f"[INFO] Found incompatibility between parts {part_ids[0]} and {part_ids[1]}")
+                logger.info(f"Found incompatibility between parts {part_ids[0]} and {part_ids[1]}")
                 
             except Exception as e:
                 # Skip invalid part IDs
-                print(f"[ERROR] Failed to process incompatibility: {str(e)}")
+                logger.error(f"Failed to process incompatibility: {str(e)}")
                 continue
     
-    print(f"[INFO] Completed extraction of compatibility edges: {len(edges)} found")
+    logger.info(f"Completed extraction of compatibility edges: {len(edges)} found")
     return edges
 
 async def update_system_compatibility_graph(edges: List[Dict[str, Any]], system_id: Optional[str] = None) -> None:
@@ -393,7 +395,7 @@ async def update_system_compatibility_graph(edges: List[Dict[str, Any]], system_
     try:
         # If system_id is not provided, try to find the relevant system
         if not system_id and len(edges) > 0:
-            print(f"[INFO] No system_id provided, attempting to find relevant system")
+            logger.info("No system_id provided, attempting to find relevant system")
             # Get all systems to find the one that contains the parts
             response = supabase.table("systems").select("*").execute()
             systems = response.data
@@ -418,28 +420,28 @@ async def update_system_compatibility_graph(edges: List[Dict[str, Any]], system_
                 system_subsystem_ids = set(str(sid) for sid in system.get("subsystem_ids", []))
                 if system_subsystem_ids.intersection(relevant_subsystem_ids):
                     system_id = str(system["id"])
-                    print(f"[INFO] Found relevant system with ID: {system_id}")
+                    logger.info(f"Found relevant system with ID: {system_id}")
                     break
         
         if system_id:
-            print(f"[INFO] Updating compatibility graph for system {system_id}")
+            logger.info(f"Updating compatibility graph for system {system_id}")
             
             # 새 그래프 구성 (기존 그래프와 병합하지 않고 완전히 대체)
             new_compatibility_graph = {
                 "edges": edges  # 새로운 엣지만 사용
             }
             
-            # 데이터베이스 업데이트 - 기��� 그래프 덮어쓰기
+            # 데이터베이스 업데이트 - 기존 그래프 덮어쓰기
             supabase.table("systems").update({
                 "compatibility_graph": new_compatibility_graph
             }).eq("id", system_id).execute()
             
-            print(f"[SUCCESS] Replaced compatibility graph for system {system_id} with {len(edges)} edges")
+            logger.info(f"Replaced compatibility graph for system {system_id} with {len(edges)} edges")
         else:
-            print("[WARNING] Could not determine which system to update compatibility graph for")
+            logger.warning("Could not determine which system to update compatibility graph for")
             
     except Exception as e:
-        print(f"[ERROR] Failed to update compatibility graph: {str(e)}")
+        logger.error(f"Failed to update compatibility graph: {str(e)}")
         # Don't raise an exception here, just log the error
         # This allows the API to continue returning results even if 
         # the compatibility graph can't be updated
@@ -452,7 +454,7 @@ async def compatibility_check(request: CompatibilityRequest):
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not available")
         
-    if not genai:
+    if genai is None:
         raise HTTPException(status_code=500, detail="LLM service not available")
     
     try:
@@ -503,7 +505,7 @@ async def compatibility_check(request: CompatibilityRequest):
         }
         
     except Exception as e:
-        print(f"[ERROR] Error in compatibility check: {str(e)}")
+        logger.error(f"Error in compatibility check: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error checking compatibility: {str(e)}")
 
 @app.get("/")
@@ -561,3 +563,7 @@ def env_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Mangum 핸들러는 맨 마지막에 정의 - 순서 중요
+from mangum import Mangum
+handler = Mangum(app)
