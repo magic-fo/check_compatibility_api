@@ -165,10 +165,12 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     for part in parts:
         part_info = {
             "id": str(part["id"]),  # ID를 문자열로 변환
-            "name": part.get("product_name", part.get("part_name", "")),  # product_name이나 part_name 사용
-            "category": part.get("category", ""),
+            "name": part.get("part_name", ""),  # part_name 사용
+            "product_name": part.get("product_name", ""),  # product_name 명시적으로 포함
             "specifications": part.get("specifications", {}),
-            "description": part.get("part_description", "")
+            "description": part.get("part_description", ""),
+            "dimensions": part.get("dimensions", {}),  # 치수 정보 추가
+            "weight": part.get("weight", {})  # 무게 정보 추가
         }
         parts_info.append(part_info)
         
@@ -180,7 +182,6 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
             "id": str(subsystem["id"]),
             "name": subsystem.get("subsystem_name", ""),  # subsystem_name 사용
             "description": subsystem.get("subsystem_description", ""),
-            "requirements": subsystem.get("requirements", {}),
             "part_ids": [str(pid) for pid in subsystem.get("part_ids", [])]
         }
         subsystems_info.append(subsystem_info)
@@ -191,9 +192,7 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
         # ID를 문자열로 변환하고 subsystem_ids도 모두 문자열로 변환
         system_info = {
             "id": str(system["id"]),
-            "name": system.get("system_name", ""),  # system_name 사용
             "description": system.get("system_description", ""),
-            "requirements": system.get("requirements", {}),
             "subsystem_ids": [str(sid) for sid in system.get("subsystem_ids", [])]
         }
         systems_info.append(system_info)
@@ -223,56 +222,90 @@ async def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsyst
     Returns:
         List of compatibility results
     """
+    # 시스템 인스트럭션 정의
+    system_instruction = """**Goal:**
+
+You must evaluate and verify the compatibility of mechanical parts with other parts in the subsystem using their detailed specifications, dimensions, and attributes.
+
+**Return Format (JSON):**
+
+```json
+[
+  {
+    "part_id": "string",
+    "available": "boolean",
+    "incompatibility": "object"
+  }
+]
+```
+
+**Note:**
+
+- Ensure that a part's `available` status is set to `false` **only when it has a direct incompatibility** with another part.
+- You will receive a structured JSON input with the following hierarchy:
+    - **parts**: An array of part objects with these fields:
+        - **id:** A string that uniquely identifies the part.
+        - **name:** The specific part name.
+        - **product_name:** The exact, catalog-specific part model name.
+        - **specifications:** Key-value pairs detailing every critical parameter (values as strings).
+        - **description:** A one-sentence, clear description of the part.
+        - **dimensions:** An object containing information about the part's dimensions.
+        - **weight:** An object with the part's weight information.
+    - **subsystems**: An array of subsystem objects with these fields:
+        - **id:** A string that uniquely identifies the subsystem.
+        - **name:** The name of the subsystem.
+        - **description:** A description of the subsystem highlighting its features.
+        - **part_ids:** An array of strings containing the IDs of parts in this subsystem.
+    - **systems**: An array of system objects with these fields:
+        - **id:** A string that uniquely identifies the system.
+        - **description:** A one-sentence, clear description of the entire system.
+        - **subsystem_ids:** An array of strings containing the IDs of subsystems in this system.
+- In your output:
+    - Return an array containing one object for each part in the input.
+    - Each part object must have:
+        - **part_id:** A string that uniquely identifies the part.
+        - **available:** A boolean indicating whether the part is compatible with other parts in the system.
+        - **incompatibility:**
+            - If **available** is `true`, provide an empty object {}.
+            - If **available** is `false`, provide an object where each key is an incompatible part's id (as string) and each value is a string explaining the reason for the incompatibility.
+- **Criteria for Compatibility and Interchangeability Inspection Between Parts:**
+    - **Physical Interface Compatibility**
+        - *Dimensional Verification*: Confirm critical dimensions and tolerance matching.
+        - *Mechanical Connections*: Ensure exact matching of threads, keyways, splines, flanges, etc.
+        - *Mounting Structure*: Verify that mounting hole positions, diameters, and patterns match exactly.
+    - **Functional Compatibility**
+        - *Performance Parameter Verification*: Compare key performance indicators such as torque, output, flow rate, pressure, etc.
+        - *Operating Range Compatibility*: Confirm compatibility of RPM, load range, pressure range, etc.
+        - *System Responsiveness*: Verify that response time and acceleration/deceleration characteristics match.
+        - *Operating Characteristics*: Evaluate the impact of vibration, noise, and heat generation on overall system performance.
+    - **Electrical/Electronic Compatibility**
+        - *Electrical Specifications*: Match voltage, current, impedance, and frequency requirements.
+        - *Connector Compatibility*: Verify matching of pin layout, connector type, and size.
+        - *Signal Interface*: Ensure communication protocols and signal levels are compatible.
+        - *EMI/EMC Characteristics*: Evaluate electromagnetic interference generation and immunity.
+    - **Material and Environmental Compatibility**
+        - *Thermal Expansion Characteristics*: Predict issues caused by differences in thermal expansion coefficients between materials.
+        - *Temperature Influence Zone*: Assess the thermal impact of heat-generating components on surrounding parts.
+    - **Practical Verification Methods**
+        - *Durability Testing*: Verify compatibility issues such as wear and fatigue during long-term use.
+        - *Boundary Condition Testing*: Verify performance under extreme conditions including maximum/minimum loads, temperatures, speeds, etc."""
+
     # Format input data
     input_data = format_llm_input(parts_info, subsystems, systems)
     
-    # Create prompt
-    prompt = f"""You are a drone engineering expert. Please analyze the compatibility between the provided drone parts.
-The input data includes parts information, subsystems they belong to, and systems those subsystems are part of.
-
-Input data:
-{input_data}
-
-Please check if there are any compatibility issues between the parts, considering:
-1. Physical compatibility (size, mounting, etc.)
-2. Electrical compatibility (voltage, current, etc.)
-3. Performance compatibility (power requirements, etc.)
-4. Protocol compatibility (communication standards, etc.)
-
-Return a JSON array where each object represents a part and its compatibility status. Each object should have:
-- part_id (string): The ID of the part being analyzed
-- available (boolean): Whether the part is available and valid
-- incompatibility (object): A dictionary mapping incompatible part IDs (as strings) to reasons for incompatibility
-- notes (string): Any additional notes about the part's compatibility
-
-Example response format:
-[
-  {{
-    "part_id": "123",
-    "available": true,
-    "incompatibility": {{}},
-    "notes": "Compatible with all other parts"
-  }},
-  {{
-    "part_id": "456",
-    "available": true,
-    "incompatibility": {{
-      "789": "Voltage mismatch - requires 12V but only supports 5V"
-    }},
-    "notes": "Partially compatible"
-  }}
-]
-
-Important: 
-- Keep part_id as a string, do not convert to number
-- Only include incompatibility entries for actual incompatibilities
-- Provide specific technical reasons for any incompatibilities
-- Consider both direct and indirect compatibility requirements
-"""
+    # 모델 초기화 (시스템 인스트럭션 포함)
+    model = genai.GenerativeModel(
+        model_name=GOOGLE_MODEL_NAME,
+        system_instruction=system_instruction
+    )
+    
+    # 사용자 프롬프트 구성 및 메시지 형식으로 전달
+    user_prompt = f"Analyze the compatibility of the following parts data: {input_data}"
+    messages = [{"role": "user", "parts": [user_prompt]}]
 
     try:
-        # Get response from LLM
-        response = model.generate_content(prompt)
+        # Get response from LLM using messages format
+        response = model.generate_content(messages)
         print(f"Raw LLM response: {response.text}")
         
         # Parse response
@@ -578,7 +611,3 @@ async def debug_endpoint(request: CompatibilityRequest):
             status_code=500,
             detail=f"Error in debug endpoint: {str(e)}"
         )
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
