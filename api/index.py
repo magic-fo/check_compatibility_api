@@ -14,8 +14,15 @@ print(f"Starting API initialization")
 # 환경 변수 로드
 load_dotenv()
 
-# FastAPI 앱 생성 - 가장 먼저 초기화
+# FastAPI 앱 생성 - 앱 정의를 먼저 해서 Mangum 핸들러가 앱 객체를 참조할 수 있게 함
 app = FastAPI()
+
+# 요청 모델
+class CompatibilityRequest(BaseModel):
+    part_ids: List[Union[str, int]]
+
+# Mangum 핸들러 설정 - 앱 객체를 인자로 전달
+handler = Mangum(app)
 
 # Supabase 설정
 supabase_url = os.environ.get("SUPABASE_URL")
@@ -40,7 +47,7 @@ except Exception as e:
 gemini_api_key = os.environ.get("GEMINI_API_KEY")
 print(f"Gemini API Key available: {bool(gemini_api_key)}")
 
-# Gemini 클라이언트 설정 - 변경된 임포트 방식
+# Gemini 클라이언트 설정 - 수정된 임포트 방식
 genai = None
 try:
     if gemini_api_key:
@@ -52,10 +59,6 @@ try:
 except Exception as e:
     print(f"[ERROR] Failed to initialize Gemini client: {str(e)}")
     genai = None
-
-# 요청 모델
-class CompatibilityRequest(BaseModel):
-    part_ids: List[Union[str, int]]
 
 async def get_parts_info(part_ids: List[str]) -> List[Dict[str, Any]]:
     """
@@ -426,7 +429,7 @@ async def update_system_compatibility_graph(edges: List[Dict[str, Any]], system_
                 "edges": edges  # 새로운 엣지만 사용
             }
             
-            # 데이터베이스 업데이트 - 기존 그래프 덮어쓰기
+            # 데이터베이스 업데이트 - 기��� 그래프 덮어쓰기
             supabase.table("systems").update({
                 "compatibility_graph": new_compatibility_graph
             }).eq("id", system_id).execute()
@@ -554,9 +557,6 @@ def env_check():
         "PYTHON_VERSION": sys.version
     }
     return env_vars
-
-# Mangum 핸들러 설정 - 앱 라우트 정의 후에 초기화
-handler = Mangum(app)
 
 if __name__ == "__main__":
     import uvicorn
