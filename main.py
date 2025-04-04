@@ -222,7 +222,7 @@ async def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsyst
     Returns:
         List of compatibility results
     """
-    # 시스템 인스트럭션 정의
+    # 시스템 인스트럭션을 프롬프트의 일부로 포함
     system_instruction = """**Goal:**
 
 You must evaluate and verify the compatibility of mechanical parts with other parts in the subsystem using their detailed specifications, dimensions, and attributes.
@@ -293,22 +293,29 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
     # Format input data
     input_data = format_llm_input(parts_info, subsystems, systems)
     
-    # 모델 초기화 (시스템 인스트럭션 포함)
+    # 전체 프롬프트 생성 (시스템 인스트럭션 + 입력 데이터)
+    prompt = f"{system_instruction}\n\nAnalyze the compatibility of the following parts data: {input_data}"
+    
+    # 성능 최적화를 위한 설정
+    generation_config = {
+        "temperature": 0.4,  # 낮은 온도로 일관된 응답 생성
+        "top_p": 0.8,
+        "top_k": 40,
+        "max_output_tokens": 2048,
+    }
+
+    # 기본 모델 초기화 (system_instruction 사용하지 않음)
     model = genai.GenerativeModel(
         model_name=GOOGLE_MODEL_NAME,
-        system_instruction=system_instruction
+        generation_config=generation_config
     )
     
-    # 사용자 프롬프트 구성 및 메시지 형식으로 전달
-    user_prompt = f"Analyze the compatibility of the following parts data: {input_data}"
-    messages = [{"role": "user", "parts": [user_prompt]}]
-
     try:
-        # Get response from LLM using messages format
-        response = model.generate_content(messages)
+        # 단일 프롬프트 사용
+        response = model.generate_content(prompt)
         print(f"Raw LLM response: {response.text}")
         
-        # Parse response
+        # 나머지 응답 처리 로직은 유지
         response_text = response.text
         # Remove code blocks if present
         if "```json" in response_text:
@@ -335,7 +342,8 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
         print(f"Error in LLM compatibility check: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise Exception(f"Error in LLM compatibility check: {str(e)}")
+        # 에러 메시지 추상화
+        raise Exception(f"Error in LLM compatibility check: Please check logs for details")
 
 def extract_compatibility_edges(
     llm_response: List[Dict[str, Any]]
