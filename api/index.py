@@ -12,12 +12,17 @@ print(f"Starting API initialization")
 # 환경 변수 로드
 load_dotenv()
 
+# 기본값 설정
+default_api_key = "AIzaSyDi_6WGyYpN6WGalcodwEOehBAyZp9QQ7A"
+default_supabase_url = "https://bumchatopqfyatmwpwwv.supabase.co"
+default_supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1bWNoYXRvcHFmeWF0bXdwd3d2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MDk5ODQ5NSwiZXhwIjoyMDU2NTc0NDk1fQ.h0TQ9GVkcwCl4bA254NjgZDwpd0NnlO8UCYTMXgc5WE"
+
 # Flask 앱 생성 - 가장 먼저 초기화
 app = Flask(__name__)
 
-# Supabase 설정
-supabase_url = os.environ.get("SUPABASE_URL")
-supabase_key = os.environ.get("SUPABASE_KEY")
+# Supabase 설정 - 환경 변수가 없으면 기본값 사용
+supabase_url = os.environ.get("SUPABASE_URL", default_supabase_url)
+supabase_key = os.environ.get("SUPABASE_KEY", default_supabase_key)
 
 print(f"Supabase URL available: {bool(supabase_url)}")
 print(f"Supabase Key available: {bool(supabase_key)}")
@@ -34,9 +39,9 @@ except Exception as e:
     print(f"[ERROR] Failed to initialize Supabase client: {str(e)}")
     supabase = None
 
-# Gemini API 키
-gemini_api_key = os.environ.get("GOOGLE_API_KEY")
-gemini_model_name = os.environ.get("GOOGLE_MODEL_NAME", "gemini-1.5-flash-thinking")
+# Gemini API 키 - 환경 변수가 없으면 기본값 사용
+gemini_api_key = os.environ.get("GOOGLE_API_KEY", default_api_key)
+gemini_model_name = os.environ.get("GOOGLE_MODEL_NAME", "gemini-2.0-flash-thinking-exp")
 print(f"Gemini API Key available: {bool(gemini_api_key)}")
 print(f"Using model: {gemini_model_name}")
 
