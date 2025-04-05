@@ -265,14 +265,33 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
     "incompatibility": "object"
   }
 ]
-
 ```
 
 **Note:**
 
 - Each part belongs to a subsystem. Subsystem information is used to categorize the parts, and both parts and subsystems belong to a single system. The system and subsystem details provide context for the overall configuration.
 - Ensure that a part's `available` status is set to `false` **only when it has a direct incompatibility** with another part.
-- **You must refer to the following criteria to guide your professional evaluation of compatibility and interchangeability between parts.**
+- You will receive a structured JSON input with the following format:
+    - **system_description**: A concise description of the entire system to which all parts belong
+    - **parts**: An array of part objects, each containing:
+        - **id**: A string that uniquely identifies the part
+        - **product_name**: The exact, catalog-specific part model name
+        - **specifications**: Key-value pairs detailing every critical parameter (values as strings)
+        - **description**: A one-sentence, clear description of the part
+        - **dimensions**: An object containing information about the part's dimensions
+        - **weight**: An object with the part's weight information
+        - **subsystem**: Information about the subsystem to which this part belongs:
+            - **name**: The name of the subsystem
+            - **description**: A description of the subsystem highlighting its features
+- In your output:
+    - Return an array containing one object for each part in the input.
+    - Each part object must have:
+        - **part_id:** A string that uniquely identifies the part.
+        - **available:** A boolean indicating whether the part is compatible with other parts in the system.
+        - **incompatibility:**
+            - If **available** is `true`, provide an empty object `{}`.
+            - If **available** is `false`, provide an object where each key is an incompatible part's id (as string) and each value is a string explaining the reason for the incompatibility.
+- **Criteria for Compatibility and Interchangeability Inspection Between Parts:**
     - **Software & Firmware Compatibility:**
         
         Ensure that software and firmware versions, communication protocols, update configurations, and system settings are fully aligned with subsystem requirements. Implement dynamic update handling and exception logging to manage changes and maintain continuous compatibility.
@@ -288,7 +307,7 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
         - *Operating Characteristics*: Evaluate the impact of vibration, noise, and heat generation on overall system performance.
     - **Electrical/Electronic Compatibility**
         - *Electrical Specifications*: Match voltage, current, impedance, and frequency requirements.
-        - *Connector Compatibility*: Verify matching of pin layout, connector type, and size.
+        - *Connector Compatibility*: Verify matching of pin layout, connector type, and size. Pay special attention to connector types such as MMCX and SMA which are not directly compatible without an adapter.
         - *Signal Interface*: Ensure communication protocols and signal levels are compatible.
         - *EMI/EMC Characteristics*: Evaluate electromagnetic interference generation and immunity.
     - **Material and Environmental Compatibility**
@@ -297,26 +316,11 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
     - **Practical Verification Methods**
         - *Durability Testing*: Verify compatibility issues such as wear and fatigue during long-term use.
         - *Boundary Condition Testing*: Verify performance under extreme conditions including maximum/minimum loads, temperatures, speeds, etc.
-- You will receive a structured JSON input with the following format:
-    - **system_description**: A concise description of the entire system to which all parts belong
-    - **parts**: An array of part objects, each containing:
-        - **id**: A string that uniquely identifies the part
-        - **product_name**: The exact, catalog-specific part model name
-        - **specifications**: Key-value pairs detailing every critical parameter (values as strings)
-        - **description**: A one-sentence, clear description of the part
-        - **dimensions**: An object containing information about the part's dimensions
-        - **weight**: An object with the part's weight information
-        - **subsystem**: Information about the subsystem to which this part belongs:
-        - **name**: The name of the subsystem
-        - **description**: A description of the subsystem highlighting its features
-- In your output:
-    - Return an array containing one object for each part in the input.
-    - Each part object must have:
-        - **part_id:** A string that uniquely identifies the part.
-        - **available:** A boolean indicating whether the part is compatible with other parts in the system.
-        - **incompatibility:**
-            - If **available** is `true`, provide an empty object `{}`.
-            - If **available** is `false`, provide an object where each key is an incompatible part's id (as string) and each value is a string explaining the reason for the incompatibility."""
+    - **Antenna Connector Compatibility**:
+        - Different connector types (e.g., MMCX, SMA, U.FL) are generally incompatible without adapters.
+        - When evaluating RF components, specifically check if the connector types match between antennas, transmitters, and receivers.
+        - Always flag incompatibility when connector types don't match (e.g., MMCX vs SMA).
+        - When an incompatibility is found, provide a clear explanation mentioning the specific connector types involved."""
         
         # 모델 설정 - 시스템 인스트럭션을 초기화 단계에서 직접 전달
         model = genai.GenerativeModel(
