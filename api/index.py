@@ -163,61 +163,72 @@ def get_systems_for_subsystems(subsystem_ids: List[str]) -> List[Dict[str, Any]]
         print(f"[ERROR] Error getting systems: {str(e)}")
         return []
 
-def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> str:
+def format_llm_input(parts_info: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> str:
     """
     Format parts, subsystems, and systems information for LLM input
     
     Args:
-        parts: List of parts
+        parts_info: List of parts
         subsystems: List of subsystems
         systems: List of systems
         
     Returns:
         Formatted input for the LLM
     """
-    # 부품 정보 포맷팅
-    parts_info = []
-    for part in parts:
+    # 결과 구조 초기화
+    result = {
+        "system_description": "General mechanical system with various components",  # 기본값
+        "parts": []
+    }
+    
+    # 시스템 설명 추가
+    if systems and len(systems) > 0:
+        system_description = systems[0].get("system_description", "")
+        if system_description:
+            result["system_description"] = system_description
+            print(f"[INFO] Using system description from system ID: {systems[0].get('id', 'unknown')}")
+        else:
+            print(f"[WARNING] No system description found, using default")
+    else:
+        print(f"[WARNING] No system found, using default system description")
+    
+    # 부품 정보에 서브시스템 정보 포함시켜 포맷팅
+    for part in parts_info:
         part_info = {
             "id": str(part["id"]),
-            "name": part.get("part_name", ""),
             "product_name": part.get("product_name", ""),
             "specifications": part.get("specifications", {}),
             "description": part.get("part_description", ""),
             "dimensions": part.get("dimensions", {}),
-            "weight": part.get("weight", {})
+            "weight": part.get("weight", {}),
+            "subsystem": {"name": "Unknown Subsystem", "description": "Subsystem details not available"}
         }
-        parts_info.append(part_info)
+        
+        # 이 부품이 속한 서브시스템 찾기
+        part_id_str = str(part["id"])
+        subsystem_found = False
+        
+        for subsystem in subsystems:
+            subsystem_part_ids = [str(p_id) for p_id in subsystem.get("part_ids", [])]
+            if part_id_str in subsystem_part_ids:
+                subsystem_name = subsystem.get("subsystem_name", "")
+                subsystem_description = subsystem.get("subsystem_description", "")
+                
+                part_info["subsystem"] = {
+                    "name": subsystem_name if subsystem_name else "Unnamed Subsystem",
+                    "description": subsystem_description if subsystem_description else f"Subsystem containing part {part_id_str}"
+                }
+                subsystem_found = True
+                print(f"[INFO] Part {part_id_str} belongs to subsystem: {subsystem.get('id', 'unknown')}")
+                break
+        
+        if not subsystem_found:
+            print(f"[WARNING] No subsystem found for part {part_id_str}, using default")
+            
+        result["parts"].append(part_info)
     
-    # 서브시스템 정보 포맷팅
-    subsystems_info = []
-    for subsystem in subsystems:
-        subsystem_info = {
-            "id": str(subsystem["id"]),
-            "name": subsystem.get("subsystem_name", ""),
-            "description": subsystem.get("subsystem_description", ""),
-            "part_ids": [str(p_id) for p_id in subsystem.get("part_ids", [])]
-        }
-        subsystems_info.append(subsystem_info)
-    
-    # 시스템 정보 포맷팅
-    systems_info = []
-    for system in systems:
-        system_info = {
-            "id": str(system["id"]),
-            "description": system.get("system_description", ""),
-            "subsystem_ids": [str(s_id) for s_id in system.get("subsystem_ids", [])]
-        }
-        systems_info.append(system_info)
-    
-    # 전체 입력 구성
-    formatted_input = json.dumps({
-        "parts": parts_info,
-        "subsystems": subsystems_info,
-        "systems": systems_info
-    })
-    
-    return formatted_input
+    print(f"[INFO] Formatted {len(parts_info)} parts for LLM input")
+    return json.dumps(result)
 
 def check_compatibility_with_llm(parts_info: List[Dict[str, Any]], subsystems: List[Dict[str, Any]], systems: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -254,30 +265,24 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
     "incompatibility": "object"
   }
 ]
-
 ```
 
 **Note:**
 
+- Each part belongs to a subsystem. Subsystem information is used to categorize the parts, and both parts and subsystems belong to a single system. The system and subsystem details provide context for the overall configuration.
 - Ensure that a part's `available` status is set to `false` **only when it has a direct incompatibility** with another part.
-- You will receive a structured JSON input with the following hierarchy:
-    - **parts**: An array of part objects with these fields:
-        - **id:** A string that uniquely identifies the part.
-        - **name:** The specific part name.
-        - **product_name:** The exact, catalog-specific part model name.
-        - **specifications:** Key-value pairs detailing every critical parameter (values as strings).
-        - **description:** A one-sentence, clear description of the part.
-        - **dimensions:** An object containing information about the part's dimensions.
-        - **weight:** An object with the part's weight information.
-    - **subsystems**: An array of subsystem objects with these fields:
-        - **id:** A string that uniquely identifies the subsystem.
-        - **name:** The name of the subsystem.
-        - **description:** A description of the subsystem highlighting its features.
-        - **part_ids:** An array of strings containing the IDs of parts in this subsystem.
-    - **systems**: An array of system objects with these fields:
-        - **id:** A string that uniquely identifies the system.
-        - **description:** A one-sentence, clear description of the entire system.
-        - **subsystem_ids:** An array of strings containing the IDs of subsystems in this system.
+- You will receive a structured JSON input with the following format:
+    - **system_description**: A concise description of the entire system to which all parts belong
+    - **parts**: An array of part objects, each containing:
+        - **id**: A string that uniquely identifies the part
+        - **product_name**: The exact, catalog-specific part model name
+        - **specifications**: Key-value pairs detailing every critical parameter (values as strings)
+        - **description**: A one-sentence, clear description of the part
+        - **dimensions**: An object containing information about the part's dimensions
+        - **weight**: An object with the part's weight information
+        - **subsystem**: Information about the subsystem to which this part belongs:
+            - **name**: The name of the subsystem
+            - **description**: A description of the subsystem highlighting its features
 - In your output:
     - Return an array containing one object for each part in the input.
     - Each part object must have:
@@ -312,44 +317,60 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
         - *Durability Testing*: Verify compatibility issues such as wear and fatigue during long-term use.
         - *Boundary Condition Testing*: Verify performance under extreme conditions including maximum/minimum loads, temperatures, speeds, etc."""
         
-        # 간소화된 쿼리 생성
-        query = f"""Check the compatibility between the parts provided.
-{input_data}"""
-        
-        # Gemini API 호출
-        generation_config = {
-            "temperature": 0.7,
-            "top_p": 0.95,
-            "top_k": 0,
-            "max_output_tokens": 8192,
-        }
-        
-        # 모델 설정 - 환경변수에서 가져온 모델 이름 사용
+        # 모델 설정 - 시스템 인스트럭션을 초기화 단계에서 직접 전달
         model = genai.GenerativeModel(
             model_name=gemini_model_name,
-            generation_config=generation_config,
+            system_instruction=system_instruction
         )
         
-        # 시스템 인스트럭션 및 콘텐츠 설정
-        chat = model.start_chat(system_instruction=system_instruction)
-        response = chat.send_message(query)
+        # 간소화된 쿼리 생성
+        query = f"Check the compatibility between the parts provided.\n{input_data}"
         
-        # 응답 파싱
+        # Gemini API 직접 호출 - 채팅 세션 없이
+        response = model.generate_content(query)
+        
+        # 응답에서 텍스트 추출
+        result_text = response.text
+        print(f"[INFO] Received response from LLM, length: {len(result_text)} characters")
+        
+        # JSON 파싱 시도
         try:
-            # 텍스트에서 JSON 부분 추출
-            result_text = response.text
-            if "```json" in result_text and "```" in result_text:
-                json_text = result_text.split("```json")[1].split("```")[0].strip()
-            else:
-                json_text = result_text
-                
-            # JSON 파싱
-            compatibility_result = json.loads(json_text)
+            compatibility_result = json.loads(result_text)
+            print(f"[INFO] Successfully parsed JSON directly from response")
             return compatibility_result
-        except Exception as e:
-            print(f"[ERROR] Failed to parse Gemini response: {str(e)}")
-            print(f"Raw response: {response.text}")
-            return []
+        except json.JSONDecodeError as json_error:
+            print(f"[WARNING] Failed to parse JSON directly: {str(json_error)}")
+            
+            # JSON 코드 블록 추출 시도
+            if "```" in result_text:
+                try:
+                    # 코드 블록 찾기
+                    json_blocks = result_text.split("```")
+                    # 첫 번째 코드 블록 이후에 나오는 텍스트를 찾음
+                    for i in range(1, len(json_blocks)):
+                        block = json_blocks[i].strip()
+                        # json 또는 비어있지 않은 블록을 찾음
+                        if block.startswith("json"):
+                            block = block[4:].strip()  # "json" 텍스트 제거
+                        if block:
+                            try:
+                                compatibility_result = json.loads(block)
+                                print(f"[INFO] Successfully parsed JSON from code block {i}")
+                                return compatibility_result
+                            except json.JSONDecodeError:
+                                continue  # 다음 블록 시도
+                    
+                    # 모든 블록을 시도해도 파싱할 수 없는 경우
+                    print(f"[ERROR] Could not parse JSON from any code block")
+                    raise
+                except Exception as e:
+                    print(f"[ERROR] Error processing code blocks: {str(e)}")
+                    raise
+            
+            # 모든 시도가 실패한 경우
+            print(f"[ERROR] Response does not contain valid JSON or code blocks")
+            print(f"[ERROR] First 200 chars of response: {result_text[:200]}...")
+            raise
     
     except Exception as e:
         print(f"[ERROR] Error checking compatibility with LLM: {str(e)}")
@@ -520,7 +541,7 @@ def compatibility_check():
             systems = []
         
         # LLM으로 호환성 체크
-        compatibility_results = check_compatibility_with_llm(parts, subsystems, systems)
+        compatibility_results = check_compatibility_with_llm(parts_info=parts, subsystems=subsystems, systems=systems)
         
         if not compatibility_results:
             return jsonify({"error": "Failed to check compatibility"}), 500
@@ -568,32 +589,14 @@ def root():
         "status": "online",
         "version": "1.0.0",
         "endpoints": {
-            "/api/compatibility-check": "POST - Check compatibility between parts",
-            "/env-check": "GET - Check environment variables"
+            "/api/compatibility-check": "POST - Check compatibility between parts"
         },
         "environments": {
             "supabase": "available" if supabase else "unavailable",
             "gemini": "available" if genai else "unavailable"
-        },
-        "debug": {
-            "python_version": sys.version,
-            "available_modules": available_modules,
-            "google_modules": google_modules if "google" in available_modules else None,
-            "env_vars": {k: bool(v) for k, v in os.environ.items() if not k.startswith("AWS_")},
         }
     }
     return jsonify(status)
-
-@app.route('/env-check')
-def env_check():
-    """환경 변수 확인 엔드포인트"""
-    env_vars = {
-        "SUPABASE_URL": bool(os.environ.get("SUPABASE_URL")),
-        "SUPABASE_KEY": bool(os.environ.get("SUPABASE_KEY")),
-        "GOOGLE_API_KEY": bool(os.environ.get("GOOGLE_API_KEY")),
-        "PYTHON_VERSION": sys.version
-    }
-    return jsonify(env_vars)
 
 # Vercel 서버리스 함수 핸들러
 def handler(event, context):
