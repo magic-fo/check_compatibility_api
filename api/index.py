@@ -36,7 +36,7 @@ except Exception as e:
 
 # Gemini API 키
 gemini_api_key = os.environ.get("GOOGLE_API_KEY")
-gemini_model_name = os.environ.get("GOOGLE_MODEL_NAME", "gemini-1.5-flash")
+gemini_model_name = os.environ.get("GOOGLE_MODEL_NAME", "gemini-1.5-flash-thinking")
 print(f"Gemini API Key available: {bool(gemini_api_key)}")
 print(f"Using model: {gemini_model_name}")
 
@@ -175,10 +175,12 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     for part in parts:
         part_info = {
             "id": str(part["id"]),
-            "part_name": part.get("part_name", ""),
+            "name": part.get("part_name", ""),
             "product_name": part.get("product_name", ""),
-            "part_description": part.get("part_description", ""),
-            "specifications": part.get("specifications", {})
+            "specifications": part.get("specifications", {}),
+            "description": part.get("part_description", ""),
+            "dimensions": part.get("dimensions", {}),
+            "weight": part.get("weight", {})
         }
         parts_info.append(part_info)
     
@@ -187,9 +189,9 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     for subsystem in subsystems:
         subsystem_info = {
             "id": str(subsystem["id"]),
-            "subsystem_name": subsystem.get("subsystem_name", ""),
-            "subsystem_description": subsystem.get("subsystem_description", ""),
-            "technical_engineering_specifications": subsystem.get("technical_engineering_specifications", [])
+            "name": subsystem.get("subsystem_name", ""),
+            "description": subsystem.get("subsystem_description", ""),
+            "part_ids": [str(p_id) for p_id in subsystem.get("part_ids", [])]
         }
         subsystems_info.append(subsystem_info)
     
@@ -198,9 +200,8 @@ def format_llm_input(parts: List[Dict[str, Any]], subsystems: List[Dict[str, Any
     for system in systems:
         system_info = {
             "id": str(system["id"]),
-            "system_name": system.get("system_name", ""),
-            "system_description": system.get("system_description", ""),
-            "system_specifications": system.get("system_specifications", {})
+            "description": system.get("system_description", ""),
+            "subsystem_ids": [str(s_id) for s_id in system.get("subsystem_ids", [])]
         }
         systems_info.append(system_info)
     
@@ -243,30 +244,68 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
 ```json
 [
   {
-    "part_ids": ["part_id_1", "part_id_2"],
-    "compatible": true/false,
-    "reason": "Detailed explanation of compatibility or incompatibility",
-    "confidence": 0.9 // 0.0-1.0 scale
-  },
-  // Additional entries for other part pairs
+    "part_id": "string",
+    "available": "boolean",
+    "incompatibility": "object"
+  }
 ]
+
 ```
 
-**Decision Criteria:**
-1. Physical dimensions matching
-2. Interface compatibility
-3. Electrical compatibility (if applicable)
-4. Signal/data compatibility (if applicable)
-5. Performance matching
-6. Environmental condition compatibility
-7. Material compatibility
+**Note:**
 
-**Guidelines:**
-- Only identify direct compatibility between specific parts
-- Be conservative: if compatibility is uncertain, mark as incompatible
-- Analyze all possible part pairs
-- Consider both technical specifications and functional requirements
-- For each compatibility evaluation, provide detailed technical reasons"""
+- Ensure that a part's `available` status is set to `false` **only when it has a direct incompatibility** with another part.
+- You will receive a structured JSON input with the following hierarchy:
+    - **parts**: An array of part objects with these fields:
+        - **id:** A string that uniquely identifies the part.
+        - **name:** The specific part name.
+        - **product_name:** The exact, catalog-specific part model name.
+        - **specifications:** Key-value pairs detailing every critical parameter (values as strings).
+        - **description:** A one-sentence, clear description of the part.
+        - **dimensions:** An object containing information about the part's dimensions.
+        - **weight:** An object with the part's weight information.
+    - **subsystems**: An array of subsystem objects with these fields:
+        - **id:** A string that uniquely identifies the subsystem.
+        - **name:** The name of the subsystem.
+        - **description:** A description of the subsystem highlighting its features.
+        - **part_ids:** An array of strings containing the IDs of parts in this subsystem.
+    - **systems**: An array of system objects with these fields:
+        - **id:** A string that uniquely identifies the system.
+        - **description:** A one-sentence, clear description of the entire system.
+        - **subsystem_ids:** An array of strings containing the IDs of subsystems in this system.
+- In your output:
+    - Return an array containing one object for each part in the input.
+    - Each part object must have:
+        - **part_id:** A string that uniquely identifies the part.
+        - **available:** A boolean indicating whether the part is compatible with other parts in the system.
+        - **incompatibility:**
+            - If **available** is `true`, provide an empty object `{}`.
+            - If **available** is `false`, provide an object where each key is an incompatible part's id (as string) and each value is a string explaining the reason for the incompatibility.
+- **Criteria for Compatibility and Interchangeability Inspection Between Parts:**
+    - **Software & Firmware Compatibility:**
+        
+        Ensure that software and firmware versions, communication protocols, update configurations, and system settings are fully aligned with subsystem requirements. Implement dynamic update handling and exception logging to manage changes and maintain continuous compatibility.
+        
+    - **Physical Interface Compatibility**
+        - *Dimensional Verification*: Confirm critical dimensions and tolerance matching.
+        - *Mechanical Connections*: Ensure exact matching of threads, keyways, splines, flanges, etc.
+        - *Mounting Structure*: Verify that mounting hole positions, diameters, and patterns match exactly.
+    - **Functional Compatibility**
+        - *Performance Parameter Verification*: Compare key performance indicators such as torque, output, flow rate, pressure, etc.
+        - *Operating Range Compatibility*: Confirm compatibility of RPM, load range, pressure range, etc.
+        - *System Responsiveness*: Verify that response time and acceleration/deceleration characteristics match.
+        - *Operating Characteristics*: Evaluate the impact of vibration, noise, and heat generation on overall system performance.
+    - **Electrical/Electronic Compatibility**
+        - *Electrical Specifications*: Match voltage, current, impedance, and frequency requirements.
+        - *Connector Compatibility*: Verify matching of pin layout, connector type, and size.
+        - *Signal Interface*: Ensure communication protocols and signal levels are compatible.
+        - *EMI/EMC Characteristics*: Evaluate electromagnetic interference generation and immunity.
+    - **Material and Environmental Compatibility**
+        - *Thermal Expansion Characteristics*: Predict issues caused by differences in thermal expansion coefficients between materials.
+        - *Temperature Influence Zone*: Assess the thermal impact of heat-generating components on surrounding parts.
+    - **Practical Verification Methods**
+        - *Durability Testing*: Verify compatibility issues such as wear and fatigue during long-term use.
+        - *Boundary Condition Testing*: Verify performance under extreme conditions including maximum/minimum loads, temperatures, speeds, etc."""
         
         # 간소화된 쿼리 생성
         query = f"""Check the compatibility between the parts provided.
@@ -274,10 +313,10 @@ You must evaluate and verify the compatibility of mechanical parts with other pa
         
         # Gemini API 호출
         generation_config = {
-            "temperature": 0.0,
+            "temperature": 0.7,
             "top_p": 0.95,
             "top_k": 0,
-            "max_output_tokens": 2048,
+            "max_output_tokens": 8192,
         }
         
         # 모델 설정 - 환경변수에서 가져온 모델 이름 사용
