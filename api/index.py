@@ -598,33 +598,6 @@ def root():
     }
     return jsonify(status)
 
-# Vercel 서버리스 함수 핸들러
-def handler(event, context):
-    """Vercel 서버리스 함수 핸들러"""
-    path = event.get('path', '/')
-    http_method = event.get('httpMethod', 'GET')
-    
-    # Flask 앱 컨텍스트 설정
-    with app.test_request_context(
-        path=path,
-        method=http_method,
-        headers=event.get('headers', {}),
-        query_string=event.get('queryStringParameters', {}),
-        data=event.get('body', '')
-    ):
-        # Flask에서 요청 처리
-        try:
-            response = app.full_dispatch_request()
-            return {
-                'statusCode': response.status_code,
-                'headers': dict(response.headers),
-                'body': response.get_data(as_text=True)
-            }
-        except Exception as e:
-            return {
-                'statusCode': 500,
-                'body': json.dumps({'error': str(e)})
-            }
-
+# 로컬 개발 환경에서만 사용되는 코드
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=8000)
